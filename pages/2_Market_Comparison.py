@@ -1,0 +1,169 @@
+"""
+Page 3: Compare the model against the real market.
+
+Pick any S&P 500 stock, pick an expiration, and the page:
+  1. pulls the live spot price and option chain from Yahoo Finance
+  2. estimates volatility from the last year of daily returns
+  3. prices every near-the-money strike with OUR Black-Scholes code
+  4. puts model price and market price side by side, colored green when
+     the market quote is above our model (option looks "rich") and red
+     when below (looks "cheap")
+
+The differences you see are real and educational: the market prices in a
+volatility SMILE (different implied vol per strike), while our model uses
+one flat historical vol for everything.
+"""
+
+import numpy as np
+import pandas as pd
+import streamlit as st
+
+import black_scholes as bs
+import market_data as md
+
+st.set_page_config(page_title="Market Comparison", layout="wide")
+st.title("Model vs. Market - S&P 500 Options")
+
+st.info(
+    "Live quotes from Yahoo Finance. Model prices come from this project's "
+    "own Black-Scholes code, fed with volatility estimated from the last "
+    "year of daily returns. Where the two disagree, the market is telling "
+    "you its volatility expectation differs from history."
+)
+
+
+@st.cache_data(ttl=24 * 3600)
+def _tickers():
+    return md.sp500_tickers()
+
+
+@st.cache_data(ttl=300)
+def _spot_and_vol(ticker):
+    spot, hist = md.get_spot_and_history(ticker)
+    return spot, md.historical_volatility(hist)
+
+
+@st.cache_data(ttl=300)
+def _expirations(ticker):
+    return md.get_expirations(ticker)
+
+
+@st.cache_data(ttl=300)
+def _chain(ticker, expiry):
+    return md.get_option_chain(ticker, expiry)
+
+
+tickers = _tickers()
+default_idx = tickers.index("AAPL") if "AAPL" in tickers else 0
+
+c1, c2, c3 = st.columns(3)
+ticker = c1.selectbox("S&P 500 stock", tickers, index=default_idx,
+                      help="All ~500 index members, scraped from Wikipedia.")
+
+try:
+    spot, hist_vol = _spot_and_vol(ticker)
+except Exception as exc:
+    st.error(f"Could not fetch data for {ticker}: {exc}")
+    st.stop()
+
+expirations = _expirations(ticker)
+if not expirations:
+    st.error(f"{ticker} has no listed options.")
+    st.stop()
+
+expiry = c2.selectbox("Expiration", expirations,
+                      help="Listed option expiration dates for this stock.")
+r = c3.number_input("Risk-Free Rate", 0.0, 0.25, 0.05, 0.005, format="%.3f",
+                    help="Used by the model. 3-month T-bill yield is a "
+                         "reasonable choice.")
+
+T = md.years_to_expiry(expiry)
+
+m1, m2, m3 = st.columns(3)
+m1.metric(f"{ticker} Spot", f"${spot:.2f}")
+m2.metric("Historical Vol (1y)", f"{hist_vol:.1%}")
+m3.metric("Time to Expiry", f"{T * 365:.0f} days")
+
+try:
+    calls, puts = _chain(ticker, expiry)
+except Exception as exc:
+    st.error(f"Could not fetch option chain: {exc}")
+    st.stop()
+
+n_strikes = st.slider("Strikes around the money to show", 4, 20, 10)
+
+
+def build_comparison(chain_df, option_type):
+    """
+    Take Yahoo's chain for one side (calls or puts), keep the strikes
+    closest to the current spot, and add our model's outputs per row.
+    """
+    df = chain_df[["strike", "lastPrice", "bid", "ask",
+                   "impliedVolatility", "volume"]].copy()
+    df = df.iloc[(df["strike"] - spot).abs().sort_values().index[:n_strikes]]
+    df = df.sort_values("strike").reset_index(drop=True)
+
+    df["model"] = [
+        float(bs.price(option_type, spot, k, T, r, hist_vol))
+        for k in df["strike"]
+    ]
+    df["diff"] = df["lastPrice"] - df["model"]
+    # back out the implied vol from the market's last price with our own
+    # bisection solver, to compare against Yahoo's reported IV
+    df["our IV"] = [
+        bs.implied_vol(option_type, p, spot, k, T, r)
+        for p, k in zip(df["lastPrice"], df["strike"])
+    ]
+    df["delta"] = [
+        float(bs.delta(option_type, spot, k, T, r, hist_vol))
+        for k in df["strike"]
+    ]
+    return df
+
+
+def style_diff(df):
+    """Green = market above model (rich), red = market below (cheap)."""
+    def color(v):
+        if pd.isna(v):
+            return ""
+        return ("background-color:#c6efce;color:#111" if v > 0
+                else "background-color:#ffc7ce;color:#111")
+    return (
+        df.style
+        .map(color, subset=["diff"])
+        .format({
+            "strike": "{:.2f}", "lastPrice": "{:.2f}", "bid": "{:.2f}",
+            "ask": "{:.2f}", "model": "{:.2f}", "diff": "{:+.2f}",
+            "impliedVolatility": "{:.1%}", "our IV": "{:.1%}",
+            "volume": "{:.0f}", "delta": "{:.3f}",
+        }, na_rep="-")
+    )
+
+
+tab_c, tab_p = st.tabs(["Calls", "Puts"])
+with tab_c:
+    st.dataframe(style_diff(build_comparison(calls, "call")),
+                 width='stretch', hide_index=True)
+with tab_p:
+    st.dataframe(style_diff(build_comparison(puts, "put")),
+                 width='stretch', hide_index=True)
+
+with st.expander("How to read this table"):
+    st.markdown("""
+- **lastPrice / bid / ask** - straight from the market. `lastPrice` can be
+  stale for illiquid strikes (check `volume`).
+- **model** - our Black-Scholes price using 1-year historical volatility.
+- **diff** - market minus model. **Green**: the market is paying MORE than
+  history justifies (it expects more movement than the past year showed).
+  **Red**: paying less.
+- **impliedVolatility** - Yahoo's reported IV.
+- **our IV** - implied vol we back out ourselves by inverting Black-Scholes
+  with a bisection solver on `lastPrice`. It should land near Yahoo's
+  number; `-` means the last price was too stale to invert.
+- **delta** - model delta; ~0.50 is at-the-money.
+
+Look at IV across strikes: it is usually NOT flat. Downside strikes carry
+higher IV (the "volatility smile/skew") because crash protection is in
+demand - one thing plain Black-Scholes, with its single flat sigma,
+cannot capture.
+""")

@@ -1,0 +1,4 @@
+__pycache__/
+*.pyc
+.streamlit/
+streamlit_boot.log
