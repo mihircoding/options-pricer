@@ -7,12 +7,18 @@ quotes from Yahoo Finance.
 
 Built with Python, NumPy, SciPy, Matplotlib, Plotly and Streamlit.
 
-## Running it
+## Running it locally
+
+On Windows, just double-click `run.bat`. Or from a terminal:
 
 ```
 pip install -r requirements.txt
-streamlit run app.py
+python -m streamlit run streamlit_app.py
 ```
+
+Your browser opens at http://localhost:8501 - that IS the website, served
+from your machine. `streamlit_app.py` is the landing page; the three tool
+pages live in `pages/` and show up in the left sidebar automatically.
 
 Sanity-check the math (textbook values, put-call parity, greeks vs numerical
 derivatives, implied-vol round trip):
@@ -20,6 +26,20 @@ derivatives, implied-vol round trip):
 ```
 python test_sanity.py
 ```
+
+## Putting it on the internet (free, no server needed)
+
+Streamlit Community Cloud hosts Streamlit apps straight from a GitHub repo:
+
+1. Make this repo **public** on GitHub (Settings -> General -> Danger Zone
+   -> Change visibility). Streamlit's free tier only deploys public repos.
+2. Go to https://share.streamlit.io and sign in with GitHub.
+3. Click "Create app" -> "Deploy a public app from GitHub".
+4. Pick this repo, branch `main`, main file `streamlit_app.py`. Deploy.
+
+A couple of minutes later you get a permanent public URL like
+`https://<yourname>-options-pricer.streamlit.app` that anyone can open -
+live market data included. It redeploys itself every time you push.
 
 ## What's on each page
 

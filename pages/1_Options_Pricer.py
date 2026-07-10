@@ -1,7 +1,5 @@
 """
-Main page: Black-Scholes pricer + interactive heatmaps.
-
-Run with:  streamlit run app.py
+Page 1: Black-Scholes pricer + interactive heatmaps.
 
 Layout mirrors the classic options-heatmap project:
   - sidebar holds every model input
