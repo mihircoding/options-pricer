@@ -9,6 +9,7 @@ Layout mirrors the classic options-heatmap project:
   - greeks table at the bottom
 """
 
+import matplotlib.pyplot as plt
 import numpy as np
 import streamlit as st
 
@@ -188,4 +189,50 @@ st.caption(
     "Delta: $ change per $1 move in the stock. Gamma: change in delta per "
     "$1 move. Vega: $ change per 1 point of volatility. Theta: $ change "
     "per day that passes. Rho: $ change per 1 point of interest rate."
+)
+
+# ---------------------------------------------------------------------------
+# Greeks across spot - the table above is one point; these curves show the
+# whole shape, which is where the intuition lives.
+# ---------------------------------------------------------------------------
+st.subheader("How the Greeks change as the stock moves")
+
+spot_axis = np.linspace(min_spot, max_spot, 200)
+fig, axes = plt.subplots(2, 2, figsize=(11, 7))
+
+axes[0, 0].plot(spot_axis, bs.delta("call", spot_axis, K, T, r, sigma),
+                color="green", label="call")
+axes[0, 0].plot(spot_axis, bs.delta("put", spot_axis, K, T, r, sigma),
+                color="red", label="put")
+axes[0, 0].set_title("Delta")
+axes[0, 0].legend()
+
+axes[0, 1].plot(spot_axis, bs.gamma(spot_axis, K, T, r, sigma),
+                color="purple")
+axes[0, 1].set_title("Gamma (same for call & put)")
+
+axes[1, 0].plot(spot_axis, bs.vega(spot_axis, K, T, r, sigma),
+                color="steelblue")
+axes[1, 0].set_title("Vega (same for call & put)")
+
+axes[1, 1].plot(spot_axis, bs.theta("call", spot_axis, K, T, r, sigma),
+                color="green", label="call")
+axes[1, 1].plot(spot_axis, bs.theta("put", spot_axis, K, T, r, sigma),
+                color="red", label="put")
+axes[1, 1].set_title("Theta ($ per day)")
+axes[1, 1].legend()
+
+for ax in axes.flat:
+    ax.axvline(K, color="gray", linestyle="--", linewidth=0.8)
+    ax.grid(alpha=0.3)
+    ax.set_xlabel("Spot price")
+fig.tight_layout()
+st.pyplot(fig)
+plt.close(fig)
+
+st.caption(
+    "Dashed line = strike. Notice how gamma and vega both peak at the "
+    "money: that's where the next dollar of stock movement matters most, "
+    "and where theta decay is deepest - at-the-money options are the most "
+    "'alive' and pay for it in daily time decay."
 )

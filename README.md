@@ -1,9 +1,13 @@
 # Options Pricer
 
+![tests](https://github.com/mihircoding/options-pricer/actions/workflows/ci.yml/badge.svg)
+
 A Black-Scholes options pricing tool with an interactive Streamlit interface.
-Prices calls and puts from scratch, computes the Greeks, builds ten classic
-multi-leg strategies, and compares model prices against live S&P 500 option
-quotes from Yahoo Finance.
+Prices calls and puts from scratch (with dividend adjustment), computes the
+Greeks, builds ten classic multi-leg strategies, cross-checks the closed form
+against a Monte Carlo simulator, and compares model prices against live
+S&P 500 option quotes from Yahoo Finance - including the volatility smile
+backed out of real market prices.
 
 Built with Python, NumPy, SciPy, Matplotlib, Plotly and Streamlit.
 
@@ -59,10 +63,17 @@ spot x volatility PnL heatmap you can slide through time.
 
 **3. Market Comparison** - pick any S&P 500 stock and expiration. The page
 pulls the live option chain, prices every near-the-money strike with this
-project's own Black-Scholes code (using 1-year historical volatility), and
-shows model vs. market side by side. Green rows: the market pays more than
-history justifies; red: less. It also backs implied volatility out of market
-prices with the project's own bisection solver.
+project's own Black-Scholes code (using 1-year historical volatility and the
+stock's actual trailing dividend yield), and shows model vs. market side by
+side. Green rows: the market pays more than history justifies; red: less. It
+backs implied volatility out of market prices with the project's own
+bisection solver and plots it per strike - the volatility smile.
+
+**4. Monte Carlo** - prices the same option by simulating thousands of
+random price paths under the model's own assumption (geometric Brownian
+motion) and shows the estimate converging onto the closed-form price, along
+with the simulated paths themselves and the terminal price distribution
+split into in-the-money (green) and worthless (red) outcomes.
 
 ## How the code works
 
@@ -124,6 +135,36 @@ work for all ten strategies:
   still be underwater halfway there if volatility spikes.
 
 PnL everywhere is just `value - cost`.
+
+### Dividends (the `q` parameter)
+
+Real stocks pay dividends, and holding an option doesn't entitle you to
+them. The standard fix (Merton's extension) is to discount the spot price by
+`e^(-qT)` everywhere it appears in the formulas, where q is the continuous
+dividend yield. Every function in `black_scholes.py` takes `q` with a
+default of 0, so the rest of the project works unchanged; the market page
+estimates q from the stock's actual trailing 12 months of dividends.
+Dividends drag the forward price down, so they make calls cheaper and puts
+dearer - the test suite checks the dividend-adjusted put-call parity
+`C - P = S e^(-qT) - K e^(-rT)` and re-verifies delta and theta against
+numerical derivatives with q > 0.
+
+### `monte_carlo.py` - the model priced a second way
+
+Black-Scholes assumes the stock follows geometric Brownian motion. Under
+the risk-neutral measure the terminal price is
+
+```
+S_T = S * exp( (r - q - sigma^2/2) T + sigma sqrt(T) Z ),   Z ~ N(0,1)
+```
+
+`terminal_prices()` draws thousands of those in one vectorized NumPy call;
+`mc_price()` averages the payoffs, discounts by `e^(-rT)`, and reports a
+standard error (payoff std / sqrt(n)) so you know how tight the estimate
+is. `convergence_curve()` shows the running mean homing in on the closed
+form - same assumption, completely different method, same answer. The test
+suite requires the two prices to agree within 4 standard errors at 500k
+paths, with and without dividends.
 
 ### `market_data.py` - live data
 

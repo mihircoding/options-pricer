@@ -20,27 +20,34 @@ st.write(
     "Use the sidebar on the left to move between pages."
 )
 
-c1, c2, c3 = st.columns(3)
+c1, c2 = st.columns(2)
 with c1:
     st.subheader("1. Options Pricer")
     st.write(
         "Price a call and a put, explore how their value changes across "
         "spot price and volatility with interactive heatmaps, see your "
-        "PnL in green/red, and read off the five Greeks."
+        "PnL in green/red, and read off the five Greeks - both at a point "
+        "and as curves across the whole spot range."
     )
-with c2:
     st.subheader("2. Strategy Builder")
     st.write(
         "Ten classic strategies - covered call, married put, spreads, "
         "straddle, strangle, butterfly, iron condor, iron butterfly. "
         "Payoff diagrams, break-evens and a PnL heatmap through time."
     )
-with c3:
+with c2:
     st.subheader("3. Market Comparison")
     st.write(
         "Pick any S&P 500 stock, pull its live option chain from Yahoo "
         "Finance, and compare real market prices against this project's "
-        "own Black-Scholes model, strike by strike."
+        "own dividend-adjusted Black-Scholes model, strike by strike - "
+        "including the volatility smile backed out of real quotes."
+    )
+    st.subheader("4. Monte Carlo")
+    st.write(
+        "Price the same option by brute-force simulation of thousands of "
+        "random price paths and watch the estimate converge onto the "
+        "Black-Scholes closed form - proof the formula does what it claims."
     )
 
 st.divider()

@@ -16,6 +16,7 @@ one flat historical vol for everything.
 
 import numpy as np
 import pandas as pd
+import plotly.graph_objects as go
 import streamlit as st
 
 import black_scholes as bs
@@ -40,7 +41,8 @@ def _tickers():
 @st.cache_data(ttl=300)
 def _spot_and_vol(ticker):
     spot, hist = md.get_spot_and_history(ticker)
-    return spot, md.historical_volatility(hist)
+    return (spot, md.historical_volatility(hist),
+            md.dividend_yield(hist, spot))
 
 
 @st.cache_data(ttl=300)
@@ -61,7 +63,7 @@ ticker = c1.selectbox("S&P 500 stock", tickers, index=default_idx,
                       help="All ~500 index members, scraped from Wikipedia.")
 
 try:
-    spot, hist_vol = _spot_and_vol(ticker)
+    spot, hist_vol, div_yield = _spot_and_vol(ticker)
 except Exception as exc:
     st.error(f"Could not fetch data for {ticker}: {exc}")
     st.stop()
@@ -79,10 +81,14 @@ r = c3.number_input("Risk-Free Rate", 0.0, 0.25, 0.05, 0.005, format="%.3f",
 
 T = md.years_to_expiry(expiry)
 
-m1, m2, m3 = st.columns(3)
+m1, m2, m3, m4 = st.columns(4)
 m1.metric(f"{ticker} Spot", f"${spot:.2f}")
 m2.metric("Historical Vol (1y)", f"{hist_vol:.1%}")
-m3.metric("Time to Expiry", f"{T * 365:.0f} days")
+m3.metric("Dividend Yield (1y)", f"{div_yield:.2%}",
+          help="Trailing 12 months of dividends / current price. Fed into "
+               "the model as q - dividends drag the forward price down, "
+               "making calls cheaper and puts dearer.")
+m4.metric("Time to Expiry", f"{T * 365:.0f} days")
 
 try:
     calls, puts = _chain(ticker, expiry)
@@ -104,18 +110,18 @@ def build_comparison(chain_df, option_type):
     df = df.sort_values("strike").reset_index(drop=True)
 
     df["model"] = [
-        float(bs.price(option_type, spot, k, T, r, hist_vol))
+        float(bs.price(option_type, spot, k, T, r, hist_vol, div_yield))
         for k in df["strike"]
     ]
     df["diff"] = df["lastPrice"] - df["model"]
     # back out the implied vol from the market's last price with our own
     # bisection solver, to compare against Yahoo's reported IV
     df["our IV"] = [
-        bs.implied_vol(option_type, p, spot, k, T, r)
+        bs.implied_vol(option_type, p, spot, k, T, r, div_yield)
         for p, k in zip(df["lastPrice"], df["strike"])
     ]
     df["delta"] = [
-        float(bs.delta(option_type, spot, k, T, r, hist_vol))
+        float(bs.delta(option_type, spot, k, T, r, hist_vol, div_yield))
         for k in df["strike"]
     ]
     return df
@@ -140,13 +146,47 @@ def style_diff(df):
     )
 
 
+calls_cmp = build_comparison(calls, "call")
+puts_cmp = build_comparison(puts, "put")
+
 tab_c, tab_p = st.tabs(["Calls", "Puts"])
 with tab_c:
-    st.dataframe(style_diff(build_comparison(calls, "call")),
-                 width='stretch', hide_index=True)
+    st.dataframe(style_diff(calls_cmp), width='stretch', hide_index=True)
 with tab_p:
-    st.dataframe(style_diff(build_comparison(puts, "put")),
-                 width='stretch', hide_index=True)
+    st.dataframe(style_diff(puts_cmp), width='stretch', hide_index=True)
+
+# ---------------------------------------------------------------------------
+# Volatility smile - the market's IV per strike vs our one flat number.
+# This chart is the single best picture of WHY model and market disagree.
+# ---------------------------------------------------------------------------
+st.subheader("Volatility Smile")
+
+fig = go.Figure()
+for cmp_df, label, color in [(calls_cmp, "Calls", "#2ca02c"),
+                             (puts_cmp, "Puts", "#d62728")]:
+    pts = cmp_df.dropna(subset=["our IV"])
+    fig.add_trace(go.Scatter(
+        x=pts["strike"], y=pts["our IV"], mode="lines+markers",
+        name=f"{label} implied vol", line={"color": color},
+        hovertemplate="Strike %{x}<br>IV %{y:.1%}<extra></extra>",
+    ))
+fig.add_hline(y=hist_vol, line_dash="dash", line_color="gray",
+              annotation_text=f"historical vol {hist_vol:.1%}")
+fig.add_vline(x=spot, line_dash="dot", line_color="steelblue",
+              annotation_text=f"spot {spot:.0f}")
+fig.update_layout(
+    xaxis_title="Strike", yaxis_title="Implied Volatility",
+    yaxis_tickformat=".0%", height=420,
+    margin={"l": 60, "r": 20, "t": 20, "b": 60},
+)
+st.plotly_chart(fig, width='stretch')
+st.caption(
+    "Each point is the volatility our bisection solver backs out of one "
+    "market price. A flat line at the gray dash is what plain Black-Scholes "
+    "assumes; the curve you actually see - higher IV away from the money, "
+    "especially on the downside - is the famous volatility smile/skew. "
+    "Gaps mean the last traded price was too stale to invert."
+)
 
 with st.expander("How to read this table"):
     st.markdown("""

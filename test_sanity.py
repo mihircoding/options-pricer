@@ -9,6 +9,7 @@ model is wrong.
 import numpy as np
 
 import black_scholes as bs
+import monte_carlo as mc
 import strategies as strat
 
 S, K, T, r, sigma = 100.0, 100.0, 1.0, 0.05, 0.20
@@ -86,6 +87,44 @@ v0 = strat.strategy_value(legs, grid, 0.0, r, sigma)
 pay = strat.strategy_payoff(legs, grid)
 check("strategy value at T=0 equals expiry payoff",
       np.allclose(v0, pay, atol=1e-4))
+
+# 7. Dividend-adjusted model (q > 0)
+q = 0.03
+cq = float(bs.call_price(S, K, T, r, sigma, q))
+pq = float(bs.put_price(S, K, T, r, sigma, q))
+# put-call parity with dividends: C - P = S*e^(-qT) - K*e^(-rT)
+parity_q = cq - pq - (S * np.exp(-q * T) - K * np.exp(-r * T))
+check(f"dividend put-call parity (residual {parity_q:.2e})",
+      abs(parity_q) < 1e-9)
+check("dividends make calls cheaper and puts dearer", cq < c and pq > p)
+
+num_delta_q = (bs.call_price(S + eps, K, T, r, sigma, q)
+               - bs.call_price(S - eps, K, T, r, sigma, q)) / (2 * eps)
+check("dividend delta matches numerical derivative",
+      abs(float(bs.delta('call', S, K, T, r, sigma, q))
+          - float(num_delta_q)) < 1e-5)
+
+num_theta_q = (bs.call_price(S, K, T - eps, r, sigma, q)
+               - bs.call_price(S, K, T + eps, r, sigma, q)) / (2 * eps) / 365
+check("dividend theta matches numerical derivative",
+      abs(float(bs.theta('call', S, K, T, r, sigma, q))
+          - float(num_theta_q)) < 1e-5)
+
+iv_q = bs.implied_vol("call", cq, S, K, T, r, q)
+check(f"dividend implied vol round-trip (got {iv_q:.4%})",
+      abs(iv_q - sigma) < 1e-4)
+
+# 8. Monte Carlo agrees with the closed form (within 4 standard errors -
+#    a ~1 in 16,000 false-failure rate at 500k paths)
+for opt in ("call", "put"):
+    mc_val, mc_err = mc.mc_price(opt, S, K, T, r, sigma, 500_000, seed=0)
+    bs_val = float(bs.price(opt, S, K, T, r, sigma))
+    check(f"MC {opt} {mc_val:.4f} within 4 SE of BS {bs_val:.4f}",
+          abs(mc_val - bs_val) < 4 * mc_err)
+
+mc_q, mc_q_err = mc.mc_price("call", S, K, T, r, sigma, 500_000, seed=0, q=q)
+check("MC with dividends matches dividend-adjusted BS",
+      abs(mc_q - cq) < 4 * mc_q_err)
 
 print()
 if failures:

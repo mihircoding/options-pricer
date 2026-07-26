@@ -75,6 +75,19 @@ def historical_volatility(hist, window=252):
     return float(log_returns.std() * np.sqrt(252))
 
 
+def dividend_yield(hist, spot):
+    """
+    Trailing dividend yield: everything the stock paid out over the
+    history window (1 year by default) divided by today's price. yfinance
+    includes a 'Dividends' column in the history dataframe - zero on most
+    days, the per-share amount on ex-dividend dates. This becomes the q
+    in the dividend-adjusted Black-Scholes model.
+    """
+    if "Dividends" not in hist.columns:
+        return 0.0
+    return float(hist["Dividends"].sum() / spot)
+
+
 def get_option_chain(ticker, expiry):
     """
     Returns (calls_df, puts_df) for one expiration date. Each dataframe
