@@ -75,6 +75,11 @@ motion) and shows the estimate converging onto the closed-form price, along
 with the simulated paths themselves and the terminal price distribution
 split into in-the-money (green) and worthless (red) outcomes.
 
+> Preparing to talk about this project in an interview? See
+> [INTERVIEW_PREP.md](INTERVIEW_PREP.md) - a line-by-line walkthrough of the
+> important code, the math behind it, and the interview questions each part
+> prepares you for.
+
 ## How the code works
 
 ### `black_scholes.py` - the model
