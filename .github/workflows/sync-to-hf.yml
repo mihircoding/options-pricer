@@ -6,7 +6,7 @@
 #   2. Make a WRITE token: huggingface.co/settings/tokens
 #   3. In the GitHub repo: Settings -> Secrets and variables -> Actions ->
 #      New repository secret, name HF_TOKEN, value = the token
-#   4. If your Space isn't named mihircoding/options-pricer, fix the URL below.
+#   4. If your Space isn't named kondamihir/options-pricer, fix the URL below.
 name: sync-to-huggingface
 
 on:
@@ -28,4 +28,4 @@ jobs:
             echo "HF_TOKEN secret not set - skipping sync (see comments in this file)."
             exit 0
           fi
-          git push --force "https://mihircoding:$HF_TOKEN@huggingface.co/spaces/mihircoding/options-pricer" main
+          git push --force "https://kondamihir:$HF_TOKEN@huggingface.co/spaces/kondamihir/options-pricer" main
