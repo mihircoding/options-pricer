@@ -1,3 +1,13 @@
+---
+title: Options Pricer
+emoji: 📈
+colorFrom: green
+colorTo: red
+sdk: streamlit
+app_file: streamlit_app.py
+pinned: false
+---
+
 # Options Pricer
 
 ![tests](https://github.com/mihircoding/options-pricer/actions/workflows/ci.yml/badge.svg)
