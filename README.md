@@ -1,12 +1,4 @@
----
-title: Options Pricer
-emoji: 📈
-colorFrom: green
-colorTo: red
-sdk: streamlit
-app_file: streamlit_app.py
-pinned: false
----
+
 
 # Options Pricer
 
@@ -84,11 +76,6 @@ random price paths under the model's own assumption (geometric Brownian
 motion) and shows the estimate converging onto the closed-form price, along
 with the simulated paths themselves and the terminal price distribution
 split into in-the-money (green) and worthless (red) outcomes.
-
-> Preparing to talk about this project in an interview? See
-> [INTERVIEW_PREP.md](INTERVIEW_PREP.md) - a line-by-line walkthrough of the
-> important code, the math behind it, and the interview questions each part
-> prepares you for.
 
 ## How the code works
 
