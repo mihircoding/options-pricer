@@ -4,5 +4,5 @@ pandas
 matplotlib
 plotly
 streamlit
-yfinance
+yfinance>=0.2.65
 lxml

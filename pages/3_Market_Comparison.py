@@ -18,6 +18,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+from yfinance.exceptions import YFRateLimitError
 
 import black_scholes as bs
 import market_data as md
@@ -26,10 +27,11 @@ st.set_page_config(page_title="Market Comparison", layout="wide")
 st.title("Model vs. Market - S&P 500 Options")
 
 st.info(
-    "Live quotes from Yahoo Finance. Model prices come from this project's "
-    "own Black-Scholes code, fed with volatility estimated from the last "
-    "year of daily returns. Where the two disagree, the market is telling "
-    "you its volatility expectation differs from history."
+    "Live quotes from Yahoo Finance, cached for up to an hour to stay under "
+    "Yahoo's rate limits. Model prices come from this project's own "
+    "Black-Scholes code, fed with volatility estimated from the last year "
+    "of daily returns. Where the two disagree, the market is telling you "
+    "its volatility expectation differs from history."
 )
 
 
@@ -38,21 +40,43 @@ def _tickers():
     return md.sp500_tickers()
 
 
-@st.cache_data(ttl=300)
+# Hour-long caches, shared across every visitor of the deployed app: one
+# successful Yahoo fetch serves everyone until it expires, which is what
+# keeps the shared cloud IP under the rate limit most of the time.
+@st.cache_data(ttl=3600)
 def _spot_and_vol(ticker):
     spot, hist = md.get_spot_and_history(ticker)
     return (spot, md.historical_volatility(hist),
             md.dividend_yield(hist, spot))
 
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=24 * 3600)
 def _expirations(ticker):
     return md.get_expirations(ticker)
 
 
-@st.cache_data(ttl=300)
+@st.cache_data(ttl=3600)
 def _chain(ticker, expiry):
     return md.get_option_chain(ticker, expiry)
+
+
+def _fetch(what, cached_fn, *args):
+    """Run one of the cached fetchers; stop the page with a readable message
+    instead of a traceback when Yahoo says no."""
+    try:
+        return cached_fn(*args)
+    except YFRateLimitError:
+        st.warning(
+            "Yahoo Finance is rate-limiting this app's shared cloud IP at "
+            "the moment (a known limitation of free hosting - every "
+            "yfinance app on Streamlit Cloud shares the same addresses). "
+            "Already-viewed tickers stay cached for an hour; for a fresh "
+            "one, retry in a minute or two."
+        )
+        st.stop()
+    except Exception as exc:
+        st.error(f"Could not fetch {what}: {exc}")
+        st.stop()
 
 
 tickers = _tickers()
@@ -62,13 +86,10 @@ c1, c2, c3 = st.columns(3)
 ticker = c1.selectbox("S&P 500 stock", tickers, index=default_idx,
                       help="All ~500 index members, scraped from Wikipedia.")
 
-try:
-    spot, hist_vol, div_yield = _spot_and_vol(ticker)
-except Exception as exc:
-    st.error(f"Could not fetch data for {ticker}: {exc}")
-    st.stop()
+spot, hist_vol, div_yield = _fetch(f"price history for {ticker}",
+                                   _spot_and_vol, ticker)
 
-expirations = _expirations(ticker)
+expirations = _fetch(f"option expirations for {ticker}", _expirations, ticker)
 if not expirations:
     st.error(f"{ticker} has no listed options.")
     st.stop()
@@ -90,11 +111,8 @@ m3.metric("Dividend Yield (1y)", f"{div_yield:.2%}",
                "making calls cheaper and puts dearer.")
 m4.metric("Time to Expiry", f"{T * 365:.0f} days")
 
-try:
-    calls, puts = _chain(ticker, expiry)
-except Exception as exc:
-    st.error(f"Could not fetch option chain: {exc}")
-    st.stop()
+calls, puts = _fetch(f"the {expiry} option chain for {ticker}",
+                     _chain, ticker, expiry)
 
 n_strikes = st.slider("Strikes around the money to show", 4, 20, 10)
 

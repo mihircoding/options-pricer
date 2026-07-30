@@ -9,9 +9,27 @@ Three jobs:
      which we feed into Black-Scholes as our "model" volatility
 """
 
+import time
+
 import numpy as np
 import pandas as pd
 import yfinance as yf
+from yfinance.exceptions import YFRateLimitError
+
+# Yahoo throttles shared cloud IPs hard (every free yfinance deployment on
+# Streamlit Cloud exits from the same few addresses). Retry with growing
+# pauses before giving up; combined with the hour-long st.cache_data on the
+# pages, one successful fetch then serves every visitor for an hour.
+_RETRY_DELAYS = (2, 5, 10)
+
+
+def _with_retries(fetch):
+    for delay in _RETRY_DELAYS:
+        try:
+            return fetch()
+        except YFRateLimitError:
+            time.sleep(delay)
+    return fetch()  # final attempt: let the error reach the page's handler
 
 # Fallback so the app still works if the Wikipedia scrape fails.
 FALLBACK_TICKERS = [
@@ -56,7 +74,7 @@ def get_spot_and_history(ticker, period="1y"):
     Returns (latest close price, dataframe of daily history).
     Raises ValueError if Yahoo returns nothing (bad ticker / no network).
     """
-    hist = yf.Ticker(ticker).history(period=period)
+    hist = _with_retries(lambda: yf.Ticker(ticker).history(period=period))
     if hist.empty:
         raise ValueError(f"No price data returned for {ticker}")
     return float(hist["Close"].iloc[-1]), hist
@@ -93,13 +111,13 @@ def get_option_chain(ticker, expiry):
     Returns (calls_df, puts_df) for one expiration date. Each dataframe
     has strike, lastPrice, bid, ask, impliedVolatility, volume, etc.
     """
-    chain = yf.Ticker(ticker).option_chain(expiry)
+    chain = _with_retries(lambda: yf.Ticker(ticker).option_chain(expiry))
     return chain.calls, chain.puts
 
 
 def get_expirations(ticker):
     """List of available option expiration dates ('YYYY-MM-DD' strings)."""
-    return list(yf.Ticker(ticker).options)
+    return list(_with_retries(lambda: yf.Ticker(ticker).options))
 
 
 def years_to_expiry(expiry_str):
