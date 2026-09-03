@@ -51,6 +51,11 @@ num_theta = (bs.call_price(S, K, T - eps, r, sigma)
 check("theta matches numerical derivative",
       abs(float(bs.theta('call', S, K, T, r, sigma)) - float(num_theta)) < 1e-5)
 
+num_rho = (bs.call_price(S, K, T, r + eps, sigma)
+           - bs.call_price(S, K, T, r - eps, sigma)) / (2 * eps) / 100
+check("rho matches numerical derivative",
+      abs(float(bs.rho('call', S, K, T, r, sigma)) - float(num_rho)) < 1e-5)
+
 # 4. Implied vol round-trip: price at 20% vol, invert, get 20% back
 iv = bs.implied_vol("call", c, S, K, T, r)
 check(f"implied vol round-trip (got {iv:.4%})", abs(iv - sigma) < 1e-4)
