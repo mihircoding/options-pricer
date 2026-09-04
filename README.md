@@ -168,7 +168,33 @@ form - same assumption, completely different method, same answer. The test
 suite requires the two prices to agree within 4 standard errors at 500k
 paths, with and without dividends.
 
+### `binomial.py` - American exercise, priced a third way
+
+Black-Scholes and the Monte Carlo engine above both price *European*
+exercise only - the model can't ask "what if I exercised early?" because
+the closed-form solution assumes you can't. Most listed US equity options
+are American-style, so this module builds a Cox-Ross-Rubinstein binomial
+tree, which can: at every node, walking backward from expiry, it compares
+holding the option against exercising it immediately and keeps whichever
+is worth more.
+
+Two things worth knowing from running it:
+
+- **European binomial converges to Black-Scholes** as the tree gets more
+  steps - a third method (discrete tree vs. Monte Carlo vs. closed form)
+  landing in the same place, which is the whole point of cross-checking a
+  pricing model three different ways instead of trusting one derivation.
+- **The early-exercise premium is real and it isn't the same for calls and
+  puts.** With no dividend, an American call is worth exactly the same as
+  its European twin - there's nothing to gain by exercising early and
+  giving up remaining time value for free. A deep in-the-money American
+  put is a different story even with no dividend (locking in the strike
+  early starts earning interest on it sooner), and once a dividend is
+  added, American calls pick up a premium too. `test_sanity.py` checks
+  all three of those directly instead of assuming they hold.
+
 ### `market_data.py` - live data
+
 
 - S&P 500 tickers are scraped from Wikipedia with `pandas.read_html`
   (hardcoded 60-ticker fallback if offline).

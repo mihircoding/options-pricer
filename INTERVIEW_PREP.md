@@ -425,8 +425,11 @@ page displays the violation directly. Real returns also jump and have fat
 tails (kurtosis), which the smile is partly compensating for.
 
 **Q: How would you extend this project?**
-American pricing via a CRR binomial tree (converges to BS as steps → ∞ —
-another cross-validation); an IV *surface* (smile per expiry, interpolated);
+Done: American pricing via a CRR binomial tree (`binomial.py`) — converges
+to BS as steps → ∞, and the tree also puts a number on the early-exercise
+premium itself (deep ITM American put: worth more even with no dividend;
+American call: only picks up a premium once there's a dividend to capture).
+Still open: an IV *surface* (smile per expiry, interpolated);
 Newton-with-bisection-fallback IV solver; Greeks from Monte Carlo
 (pathwise / likelihood-ratio estimators); EWMA or GARCH vol estimates.
 

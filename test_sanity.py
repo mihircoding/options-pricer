@@ -8,6 +8,7 @@ model is wrong.
 
 import numpy as np
 
+import binomial as bino
 import black_scholes as bs
 import monte_carlo as mc
 import strategies as strat
@@ -130,6 +131,40 @@ for opt in ("call", "put"):
 mc_q, mc_q_err = mc.mc_price("call", S, K, T, r, sigma, 500_000, seed=0, q=q)
 check("MC with dividends matches dividend-adjusted BS",
       abs(mc_q - cq) < 4 * mc_q_err)
+
+# 9. Binomial tree (American/European) - two checks that don't depend on
+#    each other agreeing by construction, since they easily could if I'd
+#    made a copy-paste mistake.
+#
+#    a) European binomial -> Black-Scholes as steps grows. Different model
+#       (discrete tree vs. closed-form integral), same no-arbitrage
+#       argument, should land in the same place.
+euro_tree = bino.crr_price("call", "european", S, K, T, r, sigma, steps=500)
+check(f"European binomial -> Black-Scholes ({euro_tree:.4f} vs {c:.4f})",
+      abs(euro_tree - c) < 0.02)
+
+#    b) No dividend -> American call should never be worth exercising early
+#       (a well-known result: you'd throw away remaining time value for
+#       nothing, since there's no dividend to capture). American and
+#       European calls should price identically when q=0.
+prem_call_no_div = bino.early_exercise_premium("call", S, K, T, r, sigma, q=0.0, steps=300)
+check(f"American call = European call when q=0 (premium {prem_call_no_div:.2e})",
+      abs(prem_call_no_div) < 1e-6)
+
+#    c) Puts are different: even with no dividend, it can be worth
+#       exercising a deep ITM put early to start earning interest on the
+#       strike now instead of waiting. Premium should be strictly positive
+#       for a put that's meaningfully in the money.
+prem_put_itm = bino.early_exercise_premium("put", 70.0, 100.0, T, r, sigma, q=0.0, steps=300)
+check(f"American put has positive early-exercise premium when deep ITM "
+      f"({prem_put_itm:.4f})", prem_put_itm > 0.01)
+
+#    d) With a dividend, American calls CAN be worth exercising early too
+#       (to capture the dividend before the stock drops on ex-div date) -
+#       premium should turn positive once q > 0.
+prem_call_div = bino.early_exercise_premium("call", S, K, T, r, sigma, q=0.05, steps=300)
+check(f"American call premium turns positive with a dividend ({prem_call_div:.4f})",
+      prem_call_div > 0.0)
 
 print()
 if failures:
