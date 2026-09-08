@@ -135,3 +135,47 @@ with right:
         "The running average of the simulation homing in on the "
         "closed-form price as more paths are added."
     )
+
+# ---------------------------------------------------------------------------
+# Greeks by simulation, two different ways
+# ---------------------------------------------------------------------------
+st.subheader("Greeks by simulation")
+st.markdown(
+    "The price above came from averaging a payoff. These Greeks come from "
+    "differentiating that same averaging process - **not** from the "
+    "closed-form Black-Scholes derivatives, even though they're shown "
+    "alongside them for comparison."
+)
+
+greeks_mc = mc.mc_greeks(option_type, S, K, T, r, sigma, n_paths, seed)
+bs_delta = float(bs.delta(option_type, S, K, T, r, sigma))
+bs_vega = float(bs.vega(S, K, T, r, sigma))
+bs_gamma = float(bs.gamma(S, K, T, r, sigma))
+
+g1, g2, g3 = st.columns(3)
+for col, label, bs_value, (mc_value, mc_se) in zip(
+    (g1, g2, g3), ("Delta", "Vega", "Gamma"),
+    (bs_delta, bs_vega, bs_gamma),
+    (greeks_mc["Delta"], greeks_mc["Vega"], greeks_mc["Gamma"]),
+):
+    col.metric(f"{label} (Black-Scholes)", f"{bs_value:.4f}")
+    within_4se = abs(mc_value - bs_value) <= 4 * mc_se
+    col.metric(f"{label} (Monte Carlo)", f"{mc_value:.4f} ± {mc_se:.4f}",
+              delta=f"{(abs(mc_value - bs_value) / mc_se):.2f} SE from formula"
+              if mc_se > 0 else None,
+              delta_color="normal" if within_4se else "inverse")
+
+st.caption(
+    "Delta and Vega use **pathwise differentiation**: the simulated path "
+    "S_T is a smooth function of spot and volatility, so the derivative "
+    "can be pushed inside the expectation and estimated directly from the "
+    "same paths used for the price. Gamma can't use that trick - it needs "
+    "the derivative of the payoff's SLOPE, and a call or put's slope jumps "
+    "at the strike, so pathwise differentiation would need the derivative "
+    "of a discontinuity. Gamma instead uses the **likelihood-ratio "
+    "(score function) method**: differentiate the probability density of "
+    "S_T instead of the payoff, which stays smooth even when the payoff "
+    "doesn't. All three are genuinely independent estimates of the same "
+    "numbers the Black-Scholes formulas give in closed form - see "
+    "`monte_carlo.py` for the derivations."
+)

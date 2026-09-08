@@ -166,6 +166,53 @@ prem_call_div = bino.early_exercise_premium("call", S, K, T, r, sigma, q=0.05, s
 check(f"American call premium turns positive with a dividend ({prem_call_div:.4f})",
       prem_call_div > 0.0)
 
+# 10. Monte Carlo Greeks (pathwise delta/vega, likelihood-ratio gamma)
+#     agree with the closed-form Black-Scholes Greeks, within 4 standard
+#     errors - same bar as the MC price check above (#8), and the same
+#     reason: these are estimates with real sampling noise, so "matches
+#     within its own reported uncertainty" is the honest check, not
+#     "matches exactly."
+for opt in ("call", "put"):
+    d_bs = float(bs.delta(opt, S, K, T, r, sigma))
+    v_bs = float(bs.vega(S, K, T, r, sigma))
+    g_bs = float(bs.gamma(S, K, T, r, sigma))
+
+    d_mc, d_se = mc.pathwise_delta(opt, S, K, T, r, sigma, 500_000, seed=0)
+    v_mc, v_se = mc.pathwise_vega(opt, S, K, T, r, sigma, 500_000, seed=0)
+    g_mc, g_se = mc.likelihood_ratio_gamma(opt, S, K, T, r, sigma, 500_000, seed=0)
+
+    check(f"MC pathwise {opt} delta {d_mc:.4f} within 4 SE of BS {d_bs:.4f}",
+          abs(d_mc - d_bs) < 4 * d_se)
+    check(f"MC pathwise {opt} vega {v_mc:.4f} within 4 SE of BS {v_bs:.4f}",
+          abs(v_mc - v_bs) < 4 * v_se)
+    check(f"MC likelihood-ratio {opt} gamma {g_mc:.4f} within 4 SE of BS {g_bs:.4f}",
+          abs(g_mc - g_bs) < 4 * g_se)
+
+# same three, with a dividend - checks that q flows correctly into all
+# three estimators, not just into mc_price
+d_bs_q = float(bs.delta("call", S, K, T, r, sigma, q))
+v_bs_q = float(bs.vega(S, K, T, r, sigma, q))
+g_bs_q = float(bs.gamma(S, K, T, r, sigma, q))
+d_mc_q, d_se_q = mc.pathwise_delta("call", S, K, T, r, sigma, 500_000, seed=0, q=q)
+v_mc_q, v_se_q = mc.pathwise_vega("call", S, K, T, r, sigma, 500_000, seed=0, q=q)
+g_mc_q, g_se_q = mc.likelihood_ratio_gamma("call", S, K, T, r, sigma, 500_000, seed=0, q=q)
+check("MC dividend delta matches dividend-adjusted BS delta",
+      abs(d_mc_q - d_bs_q) < 4 * d_se_q)
+check("MC dividend vega matches dividend-adjusted BS vega",
+      abs(v_mc_q - v_bs_q) < 4 * v_se_q)
+check("MC dividend gamma matches dividend-adjusted BS gamma",
+      abs(g_mc_q - g_bs_q) < 4 * g_se_q)
+
+# _implied_z must actually be the inverse of terminal_prices' own formula -
+# if this ever drifted out of sync, every Greek above would be silently
+# wrong in a way none of the "matches BS" checks would clearly point to.
+s_t_check = mc.terminal_prices(S, T, r, sigma, 10_000, seed=1)
+import numpy as _np
+z_recovered = mc._implied_z(s_t_check, S, T, r, sigma)
+s_t_rebuilt = S * _np.exp((r - 0.5 * sigma**2) * T + sigma * _np.sqrt(T) * z_recovered)
+check("_implied_z round-trips through terminal_prices' own formula",
+      _np.allclose(s_t_rebuilt, s_t_check, rtol=1e-9))
+
 print()
 if failures:
     print(f"{len(failures)} FAILURES: {failures}")

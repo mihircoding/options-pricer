@@ -168,6 +168,27 @@ form - same assumption, completely different method, same answer. The test
 suite requires the two prices to agree within 4 standard errors at 500k
 paths, with and without dividends.
 
+**Greeks by simulation, two different techniques.** `pathwise_delta()` and
+`pathwise_vega()` differentiate the simulated PATH: `S_T` is a smooth
+function of both spot and volatility (`dS_T/dS = S_T/S`,
+`dS_T/dsigma = S_T*(sqrt(T)*Z - sigma*T)`), so the derivative can be pushed
+inside the expectation and estimated straight from the same paths used for
+pricing. That trick breaks for gamma - it needs the derivative of the
+payoff's *slope*, and a call/put's slope jumps at the strike, so pathwise
+differentiation would need to differentiate a discontinuity.
+`likelihood_ratio_gamma()` sidesteps this by differentiating the
+*probability density* of `S_T` instead of the payoff (the "score function"
+method): the density stays smooth even where the payoff doesn't, so the
+same trick that fails for gamma via one route works via the other. All
+three are estimated from the same underlying draws (`_implied_z()` recovers
+each path's `Z` algebraically from its `S_T` rather than redrawing it, so
+there's no risk of the Greek estimators quietly using different randomness
+than the price they're being compared against) and reported with their own
+standard errors via `mc_greeks()`, same "estimate, not exact number"
+discipline as `mc_price()`. Live on the Monte Carlo page, and in
+`test_sanity.py` checked against the closed-form Greeks within 4 SE, with
+and without dividends.
+
 ### `binomial.py` - American exercise, priced a third way
 
 Black-Scholes and the Monte Carlo engine above both price *European*

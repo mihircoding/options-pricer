@@ -429,9 +429,13 @@ Done: American pricing via a CRR binomial tree (`binomial.py`) — converges
 to BS as steps → ∞, and the tree also puts a number on the early-exercise
 premium itself (deep ITM American put: worth more even with no dividend;
 American call: only picks up a premium once there's a dividend to capture).
-Still open: an IV *surface* (smile per expiry, interpolated);
-Newton-with-bisection-fallback IV solver; Greeks from Monte Carlo
-(pathwise / likelihood-ratio estimators); EWMA or GARCH vol estimates.
+Also done: Greeks from Monte Carlo (`monte_carlo.py` — pathwise delta and
+vega, likelihood-ratio gamma; gamma needs the score-function method
+specifically because a call/put payoff's slope is discontinuous at the
+strike, so pathwise differentiation — fine for delta and vega — would have
+to differentiate through that kink). Still open: an IV *surface* (smile
+per expiry, interpolated); Newton-with-bisection-fallback IV solver; EWMA
+or GARCH vol estimates.
 
 ---
 
