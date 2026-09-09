@@ -2,6 +2,8 @@
 
 # Options Pricer
 
+**[Live site &rarr;](https://mihircoding.github.io/options-pricer/)** — prices an option three independent ways (closed form, Monte Carlo, binomial tree) live in the browser, with all five Greeks.
+
 ![tests](https://github.com/mihircoding/options-pricer/actions/workflows/ci.yml/badge.svg)
 
 A Black-Scholes options pricing tool with an interactive Streamlit interface.

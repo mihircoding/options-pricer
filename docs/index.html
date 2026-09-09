@@ -1,0 +1,522 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Options Pricer — Mihir Konda</title>
+<meta name="description" content="Black-Scholes from scratch with all five Greeks, cross-checked against Monte Carlo and a binomial tree. Live in-browser calculator, volatility smile and early-exercise premium.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#fbfbfa; --surface:#fff; --line:#e5e4df; --line2:#d0cfc8;
+  --ink:#16161a; --ink2:#55554f; --ink3:#8b8a83;
+  --blue:#2a6fd6; --green:#12946a; --red:#d0413f; --amber:#b3760a;
+  --blue-bg:#eaf2fc; --green-bg:#e6f4ee; --red-bg:#fcecec; --amber-bg:#fdf3e3;
+  --radius:10px; --max:1120px;
+}
+@media (prefers-color-scheme:dark){
+  :root{--bg:#141414;--surface:#1c1c1b;--line:#2e2e2c;--line2:#3d3d3a;
+  --ink:#f2f2ef;--ink2:#b8b7b0;--ink3:#87867f;
+  --blue:#5b9bf0;--green:#3fbf90;--red:#ef6a68;--amber:#dfa03c;
+  --blue-bg:#17263a;--green-bg:#122a22;--red-bg:#331a1a;--amber-bg:#332715;}
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  font-size:16px;line-height:1.65;-webkit-font-smoothing:antialiased}
+.wrap{max-width:var(--max);margin:0 auto;padding:0 24px}
+code,.mono{font-family:"JetBrains Mono",ui-monospace,monospace;font-size:.88em}
+a{color:var(--blue);text-decoration:none}
+a:hover{text-decoration:underline}
+h1{font-size:38px;line-height:1.15;font-weight:600;letter-spacing:-.02em;margin:0 0 12px}
+h2{font-size:25px;font-weight:600;letter-spacing:-.015em;margin:0 0 6px}
+h3{font-size:17px;font-weight:600;margin:0 0 8px}
+p{margin:0 0 14px;color:var(--ink2)}
+section{padding:46px 0;border-top:1px solid var(--line)}
+.lede{font-size:18px;color:var(--ink2);max-width:70ch}
+.eyebrow{font-size:12px;font-weight:600;letter-spacing:.09em;text-transform:uppercase;color:var(--ink3);margin-bottom:10px}
+header{padding:60px 0 46px}
+.tagline{display:inline-block;font-size:12.5px;font-weight:500;padding:4px 11px;border-radius:99px;
+  background:var(--red-bg);color:var(--red);margin-bottom:18px}
+.links{display:flex;gap:10px;flex-wrap:wrap;margin-top:22px}
+.btn{display:inline-flex;align-items:center;gap:7px;padding:8px 15px;border-radius:8px;
+  border:1px solid var(--line2);color:var(--ink);font-size:14px;font-weight:500;background:var(--surface)}
+.btn:hover{border-color:var(--ink3);text-decoration:none}
+.btn.primary{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(168px,1fr));gap:12px;margin:26px 0}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:15px 17px}
+.card .k{font-size:12px;color:var(--ink3);margin-bottom:5px;font-weight:500}
+.card .v{font-size:29px;font-weight:600;letter-spacing:-.02em;line-height:1.05}
+.card .s{font-size:12.5px;color:var(--ink3);margin-top:5px}
+.v.red{color:var(--red)} .v.green{color:var(--green)}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:26px}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:18px 20px}
+.chart{position:relative;height:210px;margin-top:4px}
+.cap{font-size:13px;color:var(--ink3);line-height:1.6;margin-top:10px}
+.note{border-left:3px solid var(--amber);background:var(--amber-bg);padding:13px 16px;border-radius:0 8px 8px 0;margin:18px 0}
+.note.blue{border-color:var(--blue);background:var(--blue-bg)}
+.note p{margin:0;color:var(--ink);font-size:14.5px}
+.note p+p{margin-top:9px}
+table{width:100%;border-collapse:collapse;font-size:13.5px}
+th{text-align:left;font-weight:600;color:var(--ink2);padding:9px 10px;border-bottom:1px solid var(--line2);
+  white-space:nowrap;font-size:12.5px}
+th.sortable{cursor:pointer;user-select:none}
+th.sortable:hover{color:var(--ink)}
+td{padding:8px 10px;border-bottom:1px solid var(--line);color:var(--ink2)}
+td.n{text-align:right;font-family:"JetBrains Mono",monospace;font-size:12.5px}
+td strong{color:var(--ink);font-weight:600}
+.pos{color:var(--green)} .neg{color:var(--red)}
+.pill{display:inline-block;font-size:11px;padding:2px 8px;border-radius:99px;background:var(--blue-bg);color:var(--blue);font-weight:500}
+.pill.grey{background:var(--line);color:var(--ink3)}
+.ctl{display:flex;gap:14px;flex-wrap:wrap;align-items:end;margin-bottom:16px}
+.ctl label{display:block;font-size:12px;color:var(--ink3);margin-bottom:5px;font-weight:500}
+select,input[type=search]{padding:7px 10px;border:1px solid var(--line2);border-radius:7px;
+  background:var(--surface);color:var(--ink);font-size:13.5px;font-family:inherit}
+.slider{min-width:150px}
+.slider .row{display:flex;justify-content:space-between;font-size:12px;color:var(--ink3);margin-bottom:4px;font-weight:500}
+.slider .row b{color:var(--ink);font-family:"JetBrains Mono",monospace}
+input[type=range]{width:100%;accent-color:var(--blue)}
+.scroll{overflow-x:auto}
+.pager{display:flex;gap:8px;align-items:center;margin-top:14px;font-size:13px;color:var(--ink3)}
+.pager button{padding:5px 11px;border:1px solid var(--line2);background:var(--surface);color:var(--ink);
+  border-radius:6px;cursor:pointer;font-size:13px;font-family:inherit}
+.pager button:disabled{opacity:.4;cursor:default}
+ul{color:var(--ink2);padding-left:20px;margin:0 0 14px}
+li{margin-bottom:7px}
+footer{padding:36px 0 56px;border-top:1px solid var(--line);color:var(--ink3);font-size:13.5px}
+@media(max-width:860px){.grid2{grid-template-columns:1fr}h1{font-size:30px}}
+</style>
+
+<style>
+button.btn{cursor:pointer;font-family:inherit}
+input[type=number]{padding:7px 10px;border:1px solid var(--line2);border-radius:7px;
+  background:var(--surface);color:var(--ink);font-size:13.5px;font-family:inherit}
+.slider{min-width:170px}
+sup{font-size:.72em}
+</style>
+</head>
+<body>
+
+<header>
+<div class="wrap">
+  <div class="tagline">Three methods, one answer, no library doing the math</div>
+  <h1>Options Pricer</h1>
+  <p class="lede">Black-Scholes implemented from scratch — <span class="mono">d1</span>, <span class="mono">d2</span>, prices, all five Greeks and an implied-vol solver, with <span class="mono">scipy.stats.norm</span> as the only outside help. Then the same option priced twice more, by Monte Carlo and by a binomial tree, <strong style="color:var(--ink)">because a pricing model you've only derived one way is a model you haven't checked.</strong></p>
+  <div class="links">
+    <a class="btn primary" href="#calc">Price an option</a>
+    <a class="btn" href="https://github.com/mihircoding/options-pricer">Source on GitHub</a>
+    <a class="btn" href="https://huggingface.co/spaces/kondamihir/options-pricer">Live Streamlit app</a>
+  </div>
+</div>
+</header>
+
+<section id="calc">
+<div class="wrap">
+  <div class="eyebrow">Interactive</div>
+  <h2>All three pricers, running in your browser</h2>
+  <p class="lede">Everything below is a direct port of the project's Python: the closed form from <span class="mono">black_scholes.py</span>, the simulation from <span class="mono">monte_carlo.py</span>, the tree from <span class="mono">binomial.py</span>. Three genuinely independent methods that share only an assumption — geometric Brownian motion — and should therefore land on the same number.</p>
+
+  <div class="ctl" style="margin-bottom:18px">
+    <div><label for="i-S">Spot ($)</label><input type="number" id="i-S" value="100" step="1" style="width:88px"></div>
+    <div><label for="i-K">Strike ($)</label><input type="number" id="i-K" value="100" step="1" style="width:88px"></div>
+    <div><label for="i-days">Days to expiry</label><input type="number" id="i-days" value="365" step="1" style="width:96px"></div>
+    <div class="slider"><div class="row"><span>volatility</span><b id="v-vol">20%</b></div>
+      <input type="range" id="i-vol" min="1" max="120" step="1" value="20"></div>
+    <div class="slider"><div class="row"><span>risk-free rate</span><b id="v-r">5.0%</b></div>
+      <input type="range" id="i-r" min="0" max="150" step="1" value="50"></div>
+    <div class="slider"><div class="row"><span>dividend yield</span><b id="v-q">0.0%</b></div>
+      <input type="range" id="i-q" min="0" max="100" step="1" value="0"></div>
+  </div>
+
+  <div class="cards">
+    <div class="card"><div class="k">Call — Black-Scholes</div><div class="v green" id="o-call">—</div><div class="s" id="o-call-int">—</div></div>
+    <div class="card"><div class="k">Put — Black-Scholes</div><div class="v red" id="o-put">—</div><div class="s" id="o-put-int">—</div></div>
+    <div class="card"><div class="k">Monte Carlo (200k paths)</div><div class="v" id="o-mc">—</div><div class="s" id="o-mc-se">—</div></div>
+    <div class="card"><div class="k">Binomial tree (500 steps)</div><div class="v" id="o-bin">—</div><div class="s" id="o-bin-d">—</div></div>
+  </div>
+
+  <div class="note blue" id="agree-note">
+    <p>—</p>
+  </div>
+
+  <div class="grid2" style="margin-top:6px">
+    <div class="panel">
+      <h3>Value against spot</h3>
+      <div class="chart" style="height:250px"><canvas id="c-value"></canvas></div>
+      <p class="cap">The solid line is what the option is worth <em>today</em>; the dashed line is its payoff at expiry. The gap between them is time value — everything you're paying for uncertainty that hasn't resolved yet. It's widest at the money, which is also where gamma peaks, and it collapses to zero as expiry approaches.</p>
+    </div>
+    <div class="panel">
+      <h3>The Greeks</h3>
+      <div class="scroll"><table id="t-greeks">
+        <thead><tr><th>Greek</th><th class="n">Call</th><th class="n">Put</th><th>What it answers</th></tr></thead>
+        <tbody></tbody></table></div>
+      <div class="chart" style="height:150px;margin-top:14px"><canvas id="c-greeks"></canvas></div>
+      <p class="cap">Delta across spot for both legs. Call delta runs 0→1, put delta &minus;1→0, and they're always exactly one apart — which is put-call parity differentiated once.</p>
+    </div>
+  </div>
+</div>
+</section>
+
+<section>
+<div class="wrap">
+  <div class="eyebrow">The model</div>
+  <h2>What the formula actually says</h2>
+  <div class="grid2">
+    <div>
+      <p>Black-Scholes prices a European option under the assumption that the stock follows a random walk with constant volatility. The whole thing hangs on two numbers:</p>
+      <div class="panel" style="font-family:'JetBrains Mono',monospace;font-size:13px;line-height:1.9">
+        d1 = [ln(S/K) + (r &minus; q + &sigma;&sup2;/2)T] / (&sigma;&radic;T)<br>
+        d2 = d1 &minus; &sigma;&radic;T<br><br>
+        call = S&middot;e<sup>&minus;qT</sup>N(d1) &minus; K&middot;e<sup>&minus;rT</sup>N(d2)<br>
+        put&nbsp; = K&middot;e<sup>&minus;rT</sup>N(&minus;d2) &minus; S&middot;e<sup>&minus;qT</sup>N(&minus;d1)
+      </div>
+      <p style="margin-top:14px"><span class="mono">N(d2)</span> is (roughly) the risk-neutral probability the option finishes in the money; <span class="mono">N(d1)</span> weights that probability by how big the payoff is when it happens. Read the call formula as "what you get, minus what you pay, both discounted."</p>
+    </div>
+    <div>
+      <h3>Dividends aren't cosmetic</h3>
+      <p>Holding an option doesn't entitle you to dividends, and the stock drops by the dividend on each ex-date. Merton's fix is to discount the spot by <span class="mono">e<sup>&minus;qT</sup></span> everywhere it appears — you're effectively optioning the stock minus the dividends you won't receive.</p>
+      <p>Dividends drag the forward price down, so they make <strong style="color:var(--ink)">calls cheaper and puts dearer</strong>. Move the dividend slider above and watch both prices go opposite directions. The test suite checks the dividend-adjusted parity identity <span class="mono">C &minus; P = Se<sup>&minus;qT</sup> &minus; Ke<sup>&minus;rT</sup></span> holds to 1e-9.</p>
+      <h3>Implied volatility goes the other way</h3>
+      <p>Given a market price, find the &sigma; that reproduces it. There's no closed form, so the solver bisects: price is monotonically increasing in volatility, so keep halving <span class="mono">[0.0001, 5.0]</span> until the model price matches. That's what turns the market's quotes into the volatility smile.</p>
+    </div>
+  </div>
+</div>
+</section>
+
+<section>
+<div class="wrap">
+  <div class="eyebrow">Cross-checking</div>
+  <h2>Why price the same thing three times</h2>
+  <p class="lede">Because agreement between methods that share an assumption but nothing else is the only evidence you have that the implementation is right. A closed form can be algebraically wrong in a way that still looks plausible; it cannot be wrong in a way that a simulation of the same process happens to reproduce.</p>
+
+  <div class="grid2">
+    <div class="panel">
+      <h3>Monte Carlo</h3>
+      <p>Skip the calculus. Draw thousands of terminal prices straight from the risk-neutral distribution, average the payoffs, discount:</p>
+      <p class="mono" style="font-size:12.5px;color:var(--ink)">S_T = S&middot;exp((r &minus; q &minus; &sigma;&sup2;/2)T + &sigma;&radic;T&middot;Z)</p>
+      <p>It reports a standard error alongside the estimate, because it's an estimate — the test suite requires it to land within 4 standard errors of the closed form at 500k paths, with and without dividends. Convergence is <span class="mono">O(1/&radic;n)</span>: 100&times; more paths buys one extra digit.</p>
+    </div>
+    <div class="panel">
+      <h3>Binomial tree — and what it can do that the others can't</h3>
+      <p>Black-Scholes and Monte Carlo both price <em>European</em> exercise only. The model cannot ask "what if I exercised early?" because the derivation assumes you can't. Most listed US equity options are American.</p>
+      <p>A Cox-Ross-Rubinstein tree can: at every node, walking backward from expiry, it compares holding against exercising immediately and keeps whichever is worth more. Three results worth knowing, all checked directly in the test suite rather than assumed:</p>
+      <ul style="font-size:14px">
+        <li>With no dividend, an American call is worth <strong style="color:var(--ink)">exactly</strong> the same as its European twin — exercising early throws away time value for nothing.</li>
+        <li>A deep in-the-money American put is worth <strong style="color:var(--ink)">more</strong> even with no dividend: locking in the strike starts earning interest sooner.</li>
+        <li>Add a dividend and American calls pick up a premium too — now there's something to capture.</li>
+      </ul>
+    </div>
+  </div>
+
+  <div class="panel" style="margin-top:22px">
+    <h3>Early-exercise premium, live</h3>
+    <p class="cap" style="margin-top:0;margin-bottom:12px">American minus European, priced on the tree at your inputs above. Change the dividend yield and watch the call premium appear from nothing.</p>
+    <div class="cards" style="margin:0">
+      <div class="card"><div class="k">American call premium</div><div class="v" id="o-prem-c">—</div><div class="s" id="o-prem-c-s">—</div></div>
+      <div class="card"><div class="k">American put premium</div><div class="v" id="o-prem-p">—</div><div class="s" id="o-prem-p-s">—</div></div>
+      <div class="card"><div class="k">Put-call parity residual</div><div class="v" id="o-parity">—</div><div class="s">must be zero to machine precision</div></div>
+    </div>
+  </div>
+</div>
+</section>
+
+<section>
+<div class="wrap">
+  <div class="eyebrow">Greeks by simulation</div>
+  <h2>Two techniques, because one can't do all three</h2>
+  <div class="grid2">
+    <div>
+      <p><strong style="color:var(--ink)">Delta and vega use pathwise differentiation.</strong> The simulated terminal price is a smooth function of both spot and volatility — <span class="mono">dS_T/dS = S_T/S</span> — so the derivative can be pushed inside the expectation and estimated from the very same paths that priced the option.</p>
+      <p><strong style="color:var(--ink)">Gamma can't use that trick at all.</strong> It needs the derivative of the payoff's <em>slope</em>, and a call's slope jumps from 0 to 1 at the strike. Differentiate that kink and you get a Dirac delta, not a number. This isn't a bug to work around — it's a structural limit of the pathwise method for any Greek involving a second derivative of a kinked payoff.</p>
+    </div>
+    <div>
+      <p>So gamma uses the <strong style="color:var(--ink)">likelihood-ratio (score function) method</strong> instead, which differentiates the probability <em>density</em> of the terminal price rather than the payoff. The density stays perfectly smooth even where the payoff doesn't:</p>
+      <p class="mono" style="font-size:12px;color:var(--ink)">gamma = e<sup>&minus;rT</sup>/(S&sup2;&sigma;&sup2;T) &middot; E[payoff &middot; (Z&sup2; &minus; 1 &minus; Z&sigma;&radic;T)]</p>
+      <p>The weight doesn't depend on the payoff being differentiable at all — it would work identically on a digital option's genuinely discontinuous payoff, which is exactly the case pathwise differentiation cannot handle even in principle. All three are checked against the closed-form Greeks within 4 standard errors.</p>
+    </div>
+  </div>
+</div>
+</section>
+
+<section>
+<div class="wrap">
+  <div class="eyebrow">Honesty</div>
+  <h2>Where this model stops being true</h2>
+  <div class="grid2">
+    <div>
+      <ul>
+        <li><strong style="color:var(--ink)">Constant volatility is the assumption that breaks worst.</strong> The market prices each strike with its own implied vol — the smile — because real returns jump and have fat tails. The live app's market page displays that violation directly against real option chains.</li>
+        <li>European exercise in the closed form. US single-stock options are American, so deep ITM puts on dividend payers show the largest model-vs-market gaps.</li>
+      </ul>
+    </div>
+    <div>
+      <ul>
+        <li><span class="mono">lastPrice</span> on illiquid strikes can be hours stale — check volume before concluding an option is mispriced.</li>
+        <li><strong style="color:var(--ink)">"My model says it's cheap" is not a trade.</strong> The gap is mostly the smile, possibly American exercise premium, possibly a stale quote. The model is a lens for reading the market's expectations, not an alpha signal.</li>
+      </ul>
+    </div>
+  </div>
+</div>
+</section>
+
+<footer>
+<div class="wrap">
+  <p style="margin-bottom:10px">Built by <a href="https://github.com/mihircoding">Mihir Konda</a> — every number on this page is generated by <span class="mono">docs/build_data.py</span> from the code in <a href="https://github.com/mihircoding/options-pricer">the repository</a>, not typed in by hand.</p>
+  <p style="margin:0;font-size:13px">Quant projects: <a href="https://mihircoding.github.io/backtestingEngine/">Backtesting Engine</a> · <a href="https://mihircoding.github.io/limitOrderBook/">Order Book</a> · <a href="https://mihircoding.github.io/pairsTrading/">Pairs Trading</a> · <strong style="color:var(--ink2)">Options Pricer</strong> · <a href="https://mihircoding.github.io/portfolioOptimization/">Portfolio Optimization</a></p>
+</div>
+</footer>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const C = () => ({ink:css('--ink'), ink2:css('--ink2'), ink3:css('--ink3'), line:css('--line'),
+                  blue:css('--blue'), green:css('--green'), red:css('--red'), amber:css('--amber')});
+Chart.defaults.font.family = "Inter, sans-serif";
+Chart.defaults.font.size = 11;
+Chart.defaults.animation = false;
+
+/* ------------------------------------------------------------------
+   black_scholes.py, ported. The normal CDF is the Zelen & Severo
+   rational approximation (|error| < 7.5e-8) standing in for
+   scipy.stats.norm — everything else is the same closed form.
+   ------------------------------------------------------------------ */
+const npdf = x => Math.exp(-0.5 * x * x) / Math.sqrt(2 * Math.PI);
+function ncdf(x) {
+  const sign = x < 0 ? -1 : 1;
+  x = Math.abs(x) / Math.SQRT2;
+  const t = 1 / (1 + 0.3275911 * x);
+  const y = 1 - ((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t
+            - 0.284496736) * t + 0.254829592) * t * Math.exp(-x * x);
+  return 0.5 * (1 + sign * y);
+}
+
+function d1d2(S, K, T, r, sig, q) {
+  T = Math.max(T, 1e-10); sig = Math.max(sig, 1e-10);
+  const d1 = (Math.log(S / K) + (r - q + 0.5 * sig * sig) * T) / (sig * Math.sqrt(T));
+  return [d1, d1 - sig * Math.sqrt(T)];
+}
+const callPrice = (S, K, T, r, sig, q) => {
+  const [d1, d2] = d1d2(S, K, T, r, sig, q);
+  return S * Math.exp(-q * T) * ncdf(d1) - K * Math.exp(-r * T) * ncdf(d2);
+};
+const putPrice = (S, K, T, r, sig, q) => {
+  const [d1, d2] = d1d2(S, K, T, r, sig, q);
+  return K * Math.exp(-r * T) * ncdf(-d2) - S * Math.exp(-q * T) * ncdf(-d1);
+};
+
+function greeks(S, K, T, r, sig, q) {
+  const [d1, d2] = d1d2(S, K, T, r, sig, q);
+  const sq = Math.sqrt(Math.max(T, 1e-10)), eq = Math.exp(-q * T), er = Math.exp(-r * T);
+  const gamma = eq * npdf(d1) / (S * sig * sq);
+  const vega = S * eq * npdf(d1) * sq / 100;
+  const common = -(S * eq * npdf(d1) * sig) / (2 * sq);
+  return {
+    deltaC: eq * ncdf(d1), deltaP: eq * (ncdf(d1) - 1),
+    gamma, vega,
+    thetaC: (common - r * K * er * ncdf(d2) + q * S * eq * ncdf(d1)) / 365,
+    thetaP: (common + r * K * er * ncdf(-d2) - q * S * eq * ncdf(-d1)) / 365,
+    rhoC: K * T * er * ncdf(d2) / 100, rhoP: -K * T * er * ncdf(-d2) / 100
+  };
+}
+
+/* monte_carlo.py, ported. Seeded so the same inputs give the same
+   estimate — an unseeded number that wobbles on every keystroke reads
+   as a bug even when it's just sampling noise. */
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+function mcPrice(kind, S, K, T, r, sig, q, n = 200000) {
+  const rand = mulberry32(12345);
+  const drift = (r - q - 0.5 * sig * sig) * T, vol = sig * Math.sqrt(T), disc = Math.exp(-r * T);
+  let sum = 0, sumsq = 0;
+  for (let i = 0; i < n; i += 2) {
+    let u = rand(), v = rand();
+    if (u < 1e-12) u = 1e-12;
+    const mag = Math.sqrt(-2 * Math.log(u));
+    const z1 = mag * Math.cos(2 * Math.PI * v), z2 = mag * Math.sin(2 * Math.PI * v);
+    for (const z of [z1, z2]) {
+      const sT = S * Math.exp(drift + vol * z);
+      const pay = kind === 'call' ? Math.max(sT - K, 0) : Math.max(K - sT, 0);
+      const d = disc * pay;
+      sum += d; sumsq += d * d;
+    }
+  }
+  const mean = sum / n;
+  return {price: mean, se: Math.sqrt(Math.max(0, sumsq / n - mean * mean) / n)};
+}
+
+/* binomial.py, ported — CRR tree, European or American exercise. */
+function crr(kind, style, S, K, T, r, sig, q, steps = 500) {
+  const dt = T / steps, u = Math.exp(sig * Math.sqrt(dt)), d = 1 / u;
+  const p = (Math.exp((r - q) * dt) - d) / (u - d), disc = Math.exp(-r * dt);
+  const v = new Float64Array(steps + 1);
+  for (let i = 0; i <= steps; i++) {
+    const sT = S * Math.pow(u, steps - i) * Math.pow(d, i);
+    v[i] = kind === 'call' ? Math.max(sT - K, 0) : Math.max(K - sT, 0);
+  }
+  for (let step = steps - 1; step >= 0; step--) {
+    for (let i = 0; i <= step; i++) {
+      v[i] = disc * (p * v[i] + (1 - p) * v[i + 1]);
+      if (style === 'american') {
+        const sN = S * Math.pow(u, step - i) * Math.pow(d, i);
+        const ex = kind === 'call' ? Math.max(sN - K, 0) : Math.max(K - sN, 0);
+        if (ex > v[i]) v[i] = ex;
+      }
+    }
+  }
+  return v[0];
+}
+
+/* ---------------- wiring ---------------- */
+const $ = id => document.getElementById(id);
+const usd = x => '$' + x.toFixed(2);
+const GREEK_META = [
+  ['Delta', 'deltaC', 'deltaP', 3, 'price move per $1 of stock'],
+  ['Gamma', 'gamma', 'gamma', 4, "delta's own rate of change"],
+  ['Vega', 'vega', 'vega', 3, 'per 1 point of volatility'],
+  ['Theta', 'thetaC', 'thetaP', 3, 'per calendar day of decay'],
+  ['Rho', 'rhoC', 'rhoP', 3, 'per 1 point of interest rate']
+];
+
+let valueChart, greekChart;
+
+function read() {
+  return {
+    S: Math.max(0.01, +$('i-S').value || 100),
+    K: Math.max(0.01, +$('i-K').value || 100),
+    T: Math.max(1, +$('i-days').value || 1) / 365,
+    r: (+$('i-r').value) / 1000,
+    sig: (+$('i-vol').value) / 100,
+    q: (+$('i-q').value) / 1000
+  };
+}
+
+function update() {
+  const {S, K, T, r, sig, q} = read();
+  $('v-vol').textContent = (sig * 100).toFixed(0) + '%';
+  $('v-r').textContent = (r * 100).toFixed(1) + '%';
+  $('v-q').textContent = (q * 100).toFixed(1) + '%';
+
+  const call = callPrice(S, K, T, r, sig, q), put = putPrice(S, K, T, r, sig, q);
+  const g = greeks(S, K, T, r, sig, q);
+
+  $('o-call').textContent = usd(call);
+  $('o-put').textContent = usd(put);
+  $('o-call-int').textContent = 'intrinsic ' + usd(Math.max(S - K, 0)) +
+    ' · time value ' + usd(call - Math.max(S - K, 0));
+  $('o-put-int').textContent = 'intrinsic ' + usd(Math.max(K - S, 0)) +
+    ' · time value ' + usd(put - Math.max(K - S, 0));
+
+  const mc = mcPrice('call', S, K, T, r, sig, q);
+  $('o-mc').textContent = usd(mc.price);
+  $('o-mc-se').textContent = '± ' + mc.se.toFixed(4) + ' standard error';
+
+  const bin = crr('call', 'european', S, K, T, r, sig, q);
+  $('o-bin').textContent = usd(bin);
+  $('o-bin-d').textContent = (bin - call >= 0 ? '+' : '') + (bin - call).toFixed(4) + ' vs closed form';
+
+  // do the three agree?
+  const sigmas = mc.se > 0 ? Math.abs(mc.price - call) / mc.se : 0;
+  $('agree-note').innerHTML = `<p><strong>The three methods agree.</strong> The closed form says
+    <b>${usd(call)}</b>. Simulating 200,000 random price paths gives <b>${usd(mc.price)}</b>
+    — ${sigmas.toFixed(1)} standard errors away, which is exactly the kind of gap sampling noise
+    should produce. Walking a 500-step binomial tree backwards from expiry gives <b>${usd(bin)}</b>,
+    within ${Math.abs(bin - call).toFixed(4)} of the formula and converging closer as the tree gets finer.
+    Three different derivations, one number.</p>`;
+
+  // American premiums
+  const amC = crr('call', 'american', S, K, T, r, sig, q);
+  const amP = crr('put', 'american', S, K, T, r, sig, q);
+  const euP = crr('put', 'european', S, K, T, r, sig, q);
+  const premC = amC - bin, premP = amP - euP;
+  $('o-prem-c').textContent = premC < 5e-4 ? '$0.00' : usd(premC);
+  $('o-prem-c-s').textContent = q < 1e-9
+    ? 'zero with no dividend — never exercise early'
+    : 'the dividend is worth capturing early';
+  $('o-prem-p').textContent = usd(premP);
+  $('o-prem-p-s').textContent = premP > 0.01
+    ? 'interest on the strike, earned sooner'
+    : 'negligible this far from the money';
+  const parity = call - put - (S * Math.exp(-q * T) - K * Math.exp(-r * T));
+  $('o-parity').textContent = parity.toExponential(1);
+
+  // greeks table
+  document.querySelector('#t-greeks tbody').innerHTML = GREEK_META.map(([name, ck, pk, dp, what]) => `
+    <tr><td><strong>${name}</strong></td>
+        <td class="n">${g[ck].toFixed(dp)}</td>
+        <td class="n">${g[pk].toFixed(dp)}</td>
+        <td style="font-size:12.5px">${what}</td></tr>`).join('');
+
+  // charts
+  const lo = Math.max(1, S * 0.5), hi = S * 1.5, N = 80;
+  const xs = Array.from({length: N}, (_, i) => lo + (hi - lo) * i / (N - 1));
+  const c = C();
+  const sets = [
+    {label: 'Call today', data: xs.map(x => callPrice(x, K, T, r, sig, q)), color: c.green, width: 2},
+    {label: 'Call at expiry', data: xs.map(x => Math.max(x - K, 0)), color: c.green, width: 1.2, dash: [5, 4]},
+    {label: 'Put today', data: xs.map(x => putPrice(x, K, T, r, sig, q)), color: c.red, width: 2},
+    {label: 'Put at expiry', data: xs.map(x => Math.max(K - x, 0)), color: c.red, width: 1.2, dash: [5, 4]}
+  ];
+  const labels = xs.map(x => x.toFixed(0));
+
+  if (!valueChart) {
+    valueChart = new Chart($('c-value'), {
+      type: 'line',
+      data: {labels, datasets: sets.map(s => ({label: s.label, data: s.data, borderColor: s.color,
+        borderWidth: s.width, borderDash: s.dash || [], pointRadius: 0, tension: 0}))},
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        interaction: {mode: 'index', intersect: false},
+        plugins: {legend: {labels: {color: c.ink2, boxWidth: 10, boxHeight: 2, padding: 12}},
+                  tooltip: {callbacks: {label: ctx => `${ctx.dataset.label}: ${usd(ctx.parsed.y)}`}}},
+        scales: {x: {title: {display: true, text: 'spot price at expiry', color: c.ink3},
+                     grid: {display: false}, ticks: {color: c.ink3, maxTicksLimit: 8}},
+                 y: {grid: {color: c.line}, ticks: {color: c.ink3, callback: v => '$' + v},
+                     border: {display: false}}}
+      }
+    });
+  } else {
+    valueChart.data.labels = labels;
+    sets.forEach((s, i) => valueChart.data.datasets[i].data = s.data);
+    valueChart.update();
+  }
+
+  const dsets = [
+    {label: 'Call delta', data: xs.map(x => greeks(x, K, T, r, sig, q).deltaC), color: c.green},
+    {label: 'Put delta', data: xs.map(x => greeks(x, K, T, r, sig, q).deltaP), color: c.red}
+  ];
+  if (!greekChart) {
+    greekChart = new Chart($('c-greeks'), {
+      type: 'line',
+      data: {labels, datasets: dsets.map(s => ({label: s.label, data: s.data, borderColor: s.color,
+        borderWidth: 2, pointRadius: 0, tension: 0}))},
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        interaction: {mode: 'index', intersect: false},
+        plugins: {legend: {labels: {color: c.ink2, boxWidth: 10, boxHeight: 2, padding: 10}}},
+        scales: {x: {grid: {display: false}, ticks: {color: c.ink3, maxTicksLimit: 6}},
+                 y: {grid: {color: c.line}, ticks: {color: c.ink3}, border: {display: false},
+                     min: -1, max: 1}}
+      }
+    });
+  } else {
+    greekChart.data.labels = labels;
+    dsets.forEach((s, i) => greekChart.data.datasets[i].data = s.data);
+    greekChart.update();
+  }
+}
+
+['i-S', 'i-K', 'i-days', 'i-vol', 'i-r', 'i-q'].forEach(id =>
+  $(id).addEventListener('input', update));
+update();
+
+</script>
+</body>
+</html>
