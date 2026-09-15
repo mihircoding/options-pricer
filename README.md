@@ -1,4 +1,12 @@
-
+---
+title: Options Pricer
+emoji: 📈
+colorFrom: blue
+colorTo: gray
+sdk: streamlit
+app_file: streamlit_app.py
+pinned: false
+---
 
 # Options Pricer
 
