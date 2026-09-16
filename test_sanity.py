@@ -213,6 +213,177 @@ s_t_rebuilt = S * _np.exp((r - 0.5 * sigma**2) * T + sigma * _np.sqrt(T) * z_rec
 check("_implied_z round-trips through terminal_prices' own formula",
       _np.allclose(s_t_rebuilt, s_t_check, rtol=1e-9))
 
+
+# 11. The implied-vol solver, over the whole range instead of one point
+#     Check 6 above does a single round trip at the money, which every
+#     inversion method passes. These are the cases that separate them:
+#     far from the money, very short dated, very long dated.
+print()
+rng = np.random.default_rng(4)
+worst_err, solved, refused = 0.0, 0, 0
+for _ in range(400):
+    k = float(rng.uniform(60, 160))
+    t = float(rng.uniform(0.02, 2.0))
+    qq = float(rng.uniform(0.0, 0.04))
+    vol = float(rng.uniform(0.05, 1.2))
+    kind = "call" if rng.random() < 0.5 else "put"
+    px = float(bs.price(kind, S, k, t, r, vol, qq))
+    got = bs.implied_vol(kind, px, S, k, t, r, qq)
+    if np.isfinite(got):
+        solved += 1
+        worst_err = max(worst_err, abs(got - vol))
+    else:
+        refused += 1
+check(f"implied vol recovers 400 random inputs (worst error {worst_err:.2e}, "
+      f"{refused} refused as vega-less)", worst_err < 1e-6 and solved > 300)
+
+# A quote below intrinsic value has no implied volatility. Returning some
+# number anyway is how a bad print ends up plotted as a spike on a surface.
+below_intrinsic = float(S - K * np.exp(-r * T)) - 1.0
+check("implied vol returns nan for a price below intrinsic",
+      np.isnan(bs.implied_vol("call", below_intrinsic, S, K, T, r)))
+check("implied vol returns nan for a price above the underlying",
+      np.isnan(bs.implied_vol("call", S * 1.1, S, K, T, r)))
+
+# A deep ITM call is worth intrinsic-plus-epsilon at 5% vol and at 40% vol
+# alike: vega is ~0, so no volatility is implied. The old bisection solver
+# returned the top of its search range here, with no way to tell.
+deep_itm = float(bs.price("call", S, 40.0, 0.25, r, 0.05))
+check("implied vol refuses a quote with no vega instead of guessing",
+      np.isnan(bs.implied_vol("call", deep_itm, S, 40.0, 0.25, r)))
+
+# Newton must not be slower than the bisection it replaced. Counted in
+# pricing calls rather than seconds, so the check means the same thing on
+# any machine.
+_price = bs.price
+_n_calls = [0]
+
+
+def _counting_price(*a, **kw):
+    _n_calls[0] += 1
+    return _price(*a, **kw)
+
+
+bs.price = _counting_price
+_n_calls[0] = 0
+for _ in range(100):
+    k = float(rng.uniform(80, 130))
+    t = float(rng.uniform(0.05, 1.5))
+    vol = float(rng.uniform(0.1, 0.8))
+    bs.implied_vol("call", float(_price("call", S, k, t, r, vol)), S, k, t, r)
+calls_per_solve = _n_calls[0] / 100
+bs.price = _price
+check(f"implied vol converges in {calls_per_solve:.1f} pricing calls "
+      f"(bisection needs ~31 for the same tolerance)", calls_per_solve < 15)
+
+
+# 12. Volatility surface construction, on a chain built from a known smile
+#     Real chains can't be an assertion - the answer isn't known. So build
+#     a synthetic one: pick a forward, a discount factor and a smile, price
+#     every strike with them, and check the module recovers all three from
+#     nothing but the prices.
+print()
+
+# vol_surface works on dataframes, so this section needs pandas. The CI job
+# installs numpy and scipy only (its workflow file needs a token scope this
+# repo's automation doesn't have), so rather than fail the build on a
+# missing dependency, say plainly that the checks didn't run.
+try:
+    import pandas as pd
+
+    import vol_surface as vsurf
+except ImportError as exc:                                   # pragma: no cover
+    vsurf = None
+    print(f"SKIP  volatility surface checks - {exc}")
+
+F_true, disc_true, T_s = 105.0, np.exp(-0.04 * 0.5), 0.5
+spot_eq = F_true * disc_true
+r_true = -np.log(disc_true) / T_s
+if vsurf is not None:
+    strikes = np.arange(80.0, 131.0, 2.5)
+
+
+    def _true_iv(k):
+        """A downward-sloping smile: 22% at the forward, steeper on the downside."""
+        m = np.log(k / F_true)
+        return 0.22 - 0.35 * m + 0.60 * m**2
+
+
+    def _chain(kind):
+        prices = np.array([float(bs.price(kind, spot_eq, k, T_s, r_true, _true_iv(k)))
+                           for k in strikes])
+        return pd.DataFrame({"strike": strikes,
+                             "bid": prices * 0.995, "ask": prices * 1.005,
+                             "volume": 100.0, "openInterest": 100.0})
+
+
+    calls_df, puts_df = _chain("call"), _chain("put")
+    fwd = vsurf.forward_from_parity(vsurf.clean_quotes(calls_df, "call"),
+                                    vsurf.clean_quotes(puts_df, "put"), T_s)
+    check(f"put-call parity recovers the forward ({fwd['forward']:.4f} vs {F_true})",
+          abs(fwd["forward"] - F_true) < 0.05)
+    check(f"put-call parity recovers the discount rate ({fwd['rate']:.4%} vs 4.00%)",
+          abs(fwd["rate"] - 0.04) < 0.005)
+    check(f"parity fit is a straight line (R^2 = {fwd['r2']:.6f})", fwd["r2"] > 0.9999)
+
+    smile = vsurf.smile_for_expiry(calls_df, puts_df, T_s, "synthetic")
+    recovered = np.array([abs(row.iv - _true_iv(row.strike)) for row in smile.itertuples()])
+    check(f"surface recovers the smile it was built from (worst error "
+          f"{recovered.max():.2e} across {len(smile)} strikes)", recovered.max() < 5e-3)
+
+    atm = vsurf.atm_vol(smile)
+    check(f"at-the-money vol interpolates to the smile's own level "
+          f"({atm:.4f} vs {_true_iv(F_true):.4f})", abs(atm - _true_iv(F_true)) < 2e-3)
+
+    sk = vsurf.skew_25d(smile)
+    check(f"risk reversal is positive for a downward-sloping smile "
+          f"({sk['risk_reversal']:.4f})", sk["risk_reversal"] > 0.02)
+    check(f"butterfly is positive for a convex smile ({sk['butterfly']:.4f})",
+          sk["butterfly"] > 0)
+
+    # Only out-of-the-money quotes may survive: puts below the forward, calls
+    # above it. Mixing in the ITM leg would double-count and, worse, import the
+    # early-exercise error the OTM restriction exists to avoid.
+    wrong_side = smile[((smile["type"] == "put") & (smile["strike"] >= fwd["forward"]))
+                       | ((smile["type"] == "call") & (smile["strike"] < fwd["forward"]))]
+    check("surface keeps only out-of-the-money quotes", len(wrong_side) == 0)
+
+    # A one-sided or crossed quote is not a price. These are the rows real
+    # chains are full of, and every one of them must be dropped before it can
+    # become an implied volatility.
+    junk = pd.DataFrame({"strike": [100.0, 101.0, 102.0, 103.0],
+                         "bid": [0.0, 5.0, -1.0, 2.0],
+                         "ask": [1.0, 4.0, 2.0, 12.0],   # row 2 crossed, row 4 too wide
+                         "volume": [1, 1, 1, 1], "openInterest": [1, 1, 1, 1]})
+    check("quote filter drops zero bids, crossed markets and very wide spreads",
+          len(vsurf.clean_quotes(junk, "call")) == 0)
+
+    # Calendar arbitrage: total variance may not fall as maturity rises at a
+    # fixed moneyness. Two smiles from the same vol function at different
+    # maturities satisfy that by construction, so the check must stay quiet on
+    # them - and must fire the moment the far variance is pushed below the near
+    # one, because a check that has never fired is an untested check.
+    def _dated_chain(kind, t):
+        disc = np.exp(-0.04 * t)
+        spot = F_true * disc
+        px = np.array([float(bs.price(kind, spot, k, t, 0.04, _true_iv(k)))
+                       for k in strikes])
+        return pd.DataFrame({"strike": strikes, "bid": px * 0.995, "ask": px * 1.005,
+                             "volume": 100.0, "openInterest": 100.0})
+
+
+    near = vsurf.smile_for_expiry(_dated_chain("call", 0.25), _dated_chain("put", 0.25),
+                                  0.25, "near")
+    far = vsurf.smile_for_expiry(_dated_chain("call", 1.00), _dated_chain("put", 1.00),
+                                 1.00, "far")
+    check("calendar-arbitrage check passes a well-ordered surface",
+          len(vsurf.calendar_arbitrage(pd.concat([near, far], ignore_index=True))) == 0)
+
+    broken = far.copy()
+    broken["total_var"] = broken["total_var"] * 0.1   # far below near: free money
+    check("calendar-arbitrage check catches falling total variance",
+          len(vsurf.calendar_arbitrage(pd.concat([near, broken], ignore_index=True))) > 0)
+
 print()
 if failures:
     print(f"{len(failures)} FAILURES: {failures}")

@@ -87,6 +87,13 @@ motion) and shows the estimate converging onto the closed-form price, along
 with the simulated paths themselves and the terminal price distribution
 split into in-the-money (green) and worthless (red) outcomes.
 
+**5. Vol Surface** - builds the implied volatility surface from a live
+chain: the smile per expiry plotted in log-moneyness, the term structure of
+at-the-money vol, 25-delta risk reversal and butterfly per expiry, a
+calendar no-arbitrage check, and a bar chart of what pricing the whole chain
+with one flat volatility costs strike by strike. See below for what makes
+this different from plotting Yahoo's IV column.
+
 ## How the code works
 
 ### `black_scholes.py` - the model
@@ -242,12 +249,82 @@ so cells respond to mouse-over. PnL mode uses a red-yellow-green colorscale
 with the color range forced symmetric around zero, so yellow always sits
 exactly on break-even and green/red always mean profit/loss.
 
+### `vol_surface.py` - the smile, measured
+
+Page 3 has always said the market prices a smile while the model uses one
+flat volatility. This module turns that sentence into numbers, and three
+decisions in it are most of the difference between a surface and a plot of
+Yahoo's `impliedVolatility` column.
+
+**The forward comes from put-call parity, not from the spot.** Black-Scholes
+needs a forward, and a forward needs a dividend yield and a borrow rate that
+nobody publishes. The options are already quoting both: `C - P = e^(-rT)(F - K)`
+is a straight line in K, so regressing call-minus-put on strike gives the
+discount factor as the slope and the forward from the intercept. No dividend
+estimate, no borrow assumption. The fit's R² comes back with the answer, and
+a poor fit means the chain is refused rather than quietly built on.
+
+**Only out-of-the-money quotes are used** - puts below the forward, calls
+above. In theory both legs carry the same information; in practice the OTM
+one is liquid, tighter, and almost all time value, so its price is mostly a
+statement about volatility rather than about intrinsic value.
+
+**Mids, and the quotes are filtered first.** `lastPrice` is whenever that
+contract last traded, which on a far strike can be days ago at a different
+spot. Zero bids, crossed markets and spreads wider than half the mid are
+dropped: a quote whose bid-ask straddles ten volatility points does not pin
+down a volatility, and averaging it in is how a surface grows spikes that
+get explained as skew.
+
+What comes out of SPY on a normal day: ATM vol rising from about 14% at a
+week to 17% at two years, a 25-delta risk reversal of +4 to +5 volatility
+points at every expiry (downside protection is dearer than upside, which is
+the equity skew), a positive butterfly, and forwards that rise with maturity
+at roughly the financing rate. The calendar check - total variance must not
+fall as maturity rises at fixed moneyness - is run and reported rather than
+assumed.
+
+The honest caveat, stated in the module too: US single-name and ETF options
+are American and this inverts a European formula. Restricting to OTM quotes
+keeps the early-exercise premium small, but it is not zero on deep strikes
+and long maturities, so these IVs read slightly high. The fix is inverting
+the binomial tree instead, at roughly 500x the cost per quote - a real
+trade-off, not an oversight.
+
+### The implied-vol solver
+
+`bs.implied_vol` was bisection. It is now Newton-Raphson on vega with a
+guarded bisection fallback: **6.4 pricing calls per solve instead of 31**,
+same tolerance, which matters once a surface means a thousand inversions per
+chain. Every Newton step is checked against the bracket and thrown away if
+it lands outside it, so the guarantee bisection gives you is never given up.
+
+Two things changed with it that are worth more than the speed:
+
+- **It converges on sigma, not on price.** Stopping when the price error is
+  small sounds right and is wrong for exactly the options where vega is
+  small - a deep in-the-money call is worth intrinsic-plus-epsilon at 5% vol
+  and at 40% vol alike, so "the price matches to a millionth" can be true a
+  long way from the right volatility. The old solver returned the top of its
+  search range in those cases, silently.
+- **It returns `nan` when the quote determines no volatility at all.** Below
+  intrinsic, above the underlying, or vega too small to invert. Real chains
+  produce all three constantly, and a fabricated number is how a garbage IV
+  ends up plotted as a spike on a surface.
+
+`test_sanity.py` round-trips 400 random inputs across strikes from 60 to 160
+and maturities from a week to two years (worst error ~1e-8), checks each
+refusal case, and rebuilds a synthetic chain from a known smile to confirm
+the surface code recovers the forward, the rate and every strike's
+volatility from nothing but prices.
+
 ## Things to notice when comparing to the market
 
 - Market prices rarely match the model exactly. The model uses one flat
   historical volatility; the market prices each strike with its own implied
   volatility (the "smile/skew" - downside puts usually carry higher IV
-  because crash insurance is in demand).
+  because crash insurance is in demand). Page 5 measures that gap in dollars
+  per contract rather than leaving it as a remark.
 - `lastPrice` on illiquid strikes can be hours old - check volume before
   concluding an option is mispriced.
 - Black-Scholes prices European exercise and ignores dividends; US single

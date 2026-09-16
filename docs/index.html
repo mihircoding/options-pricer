@@ -241,6 +241,43 @@ sup{font-size:.72em}
 
 <section>
 <div class="wrap">
+  <div class="eyebrow">Real market</div>
+  <h2>The one assumption the market openly refuses</h2>
+  <p class="lede">Everything above assumes a single volatility for every strike and every expiry. Here is what SPY was actually quoting, <span id="x-asof">&mdash;</span>: <span id="x-nq">&mdash;</span> out-of-the-money quotes pulled live, each one inverted for its own implied volatility by the same solver in <span class="mono">black_scholes.py</span>. Nothing here reads Yahoo's IV column.</p>
+
+  <div class="grid2">
+    <div class="panel">
+      <div class="chart"><canvas id="c-smile"></canvas></div>
+      <p class="cap">Plotted against log(strike / forward) so expiries are comparable &mdash; a $10 move means something different in a week than in a year. The forward for each expiry comes from put-call parity, not from a dividend estimate.</p>
+    </div>
+    <div>
+      <div class="scroll"><table id="t-terms"><thead><tr><th>Expiry</th><th class="n">Days</th><th class="n">ATM vol</th><th class="n">25&Delta; RR</th><th class="n">25&Delta; fly</th></tr></thead><tbody></tbody></table></div>
+      <p style="margin-top:14px">The curve slopes down everywhere. That's the <strong style="color:var(--ink)">equity skew</strong>: a 25-delta put costs <span id="x-rr">&mdash;</span> more volatility than the matching call, at every expiry on the board. Crash protection is bid, permanently, and a flat-vol model has nowhere to put that fact.</p>
+      <p>The risk reversal and butterfly are read off the quoted deltas by interpolation, so "25-delta" means the strike the market treats as 25-delta &mdash; not one computed from a volatility we assumed.</p>
+    </div>
+  </div>
+
+  <div class="note">
+    <p><strong>Where the forward comes from, since it decides everything else.</strong> Black-Scholes needs a forward, and a forward needs a dividend yield and a borrow rate nobody publishes. The options quote both already: <span class="mono">C &minus; P = e<sup>&minus;rT</sup>(F &minus; K)</span> is a straight line in K, so regressing call-minus-put on strike gives the discount factor as the slope and the forward from the intercept. The fit's R&sup2; comes back with the answer and a poor one gets the chain refused rather than quietly used.</p>
+  </div>
+
+  <h3 style="margin-top:34px">What one flat volatility costs</h3>
+  <div class="grid2">
+    <div class="panel">
+      <div class="chart" style="height:280px"><canvas id="c-flat"></canvas></div>
+      <p class="cap">The front chain priced with a single volatility &mdash; the median of its own smile, so this is the flat model's best case.</p>
+    </div>
+    <div>
+      <p>Red is the model charging more than the market, green less. The errors are not noise scattered around zero; they are a curve, which is the smile showing up as money. Worst single strike: <strong style="color:var(--ink)" id="x-worst">&mdash;</strong>, median absolute error <span id="x-med">&mdash;</span> per contract.</p>
+      <p>Far out on the downside the flat model prices puts at essentially nothing while the market pays a few cents for them. A few cents is not an error worth chasing &mdash; but it is the market saying it does not believe in a lognormal tail, in the only language an option quote has.</p>
+      <p style="color:var(--ink3);font-size:13.5px">US ETF options are American and this inverts a European formula. Restricting to out-of-the-money quotes keeps the early-exercise premium small, not zero, so these read slightly high on deep strikes and long maturities. The fix is inverting the binomial tree instead, at roughly 500&times; the cost per quote.</p>
+    </div>
+  </div>
+</div>
+</section>
+
+<section>
+<div class="wrap">
   <div class="eyebrow">Limitations</div>
   <h2>Where this model stops being true</h2>
   <div class="grid2">
@@ -267,6 +304,7 @@ sup{font-size:.72em}
 </div>
 </footer>
 
+<script src="data.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <script>
 const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
@@ -515,6 +553,75 @@ function update() {
 ['i-S', 'i-K', 'i-days', 'i-vol', 'i-r', 'i-q'].forEach(id =>
   $(id).addEventListener('input', update));
 update();
+
+
+/* ---- live SPY volatility surface, built by docs/build_data.py ---- */
+(function () {
+  const D = window.DATA;
+  if (!D) return;
+  const pctv = x => (x * 100).toFixed(2) + '%';
+  document.getElementById('x-asof').textContent = 'as of ' + D.as_of;
+  document.getElementById('x-nq').textContent = D.n_quotes.toLocaleString();
+
+  const palette = [C().blue, C().green, C().amber, C().red, C().ink2, C().ink3];
+  new Chart(document.getElementById('c-smile'), {
+    type: 'scatter',
+    data: {datasets: D.smiles.map((s, i) => ({
+      label: `${s.expiry} (${s.days}d)`,
+      data: s.points.map(p => ({x: p[0], y: p[1]})),
+      borderColor: palette[i % palette.length],
+      backgroundColor: palette[i % palette.length],
+      showLine: true, pointRadius: 1.5, borderWidth: 1.6, tension: 0
+    }))},
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: {labels: {color: C().ink2, boxWidth: 10, boxHeight: 2, padding: 10}},
+        tooltip: {callbacks: {label: c => `${c.dataset.label}: ${pctv(c.parsed.y)} at k=${c.parsed.x.toFixed(3)}`}}
+      },
+      scales: {
+        x: {title: {display: true, text: 'log(strike / forward)', color: C().ink3},
+            grid: {color: C().line}, ticks: {color: C().ink3}},
+        y: {title: {display: true, text: 'implied volatility', color: C().ink3},
+            grid: {color: C().line}, ticks: {color: C().ink3, callback: v => (v * 100).toFixed(0) + '%'},
+            border: {display: false}}
+      }
+    }
+  });
+
+  document.querySelector('#t-terms tbody').innerHTML = D.terms.map(t => `
+    <tr><td class="mono">${t.expiry}</td>
+        <td class="n">${Math.round(t.T * 365)}</td>
+        <td class="n">${pctv(t.atm)}</td>
+        <td class="n">${t.risk_reversal >= 0 ? '+' : ''}${pctv(t.risk_reversal)}</td>
+        <td class="n">${t.butterfly >= 0 ? '+' : ''}${pctv(t.butterfly)}</td></tr>`).join('');
+
+  const rrs = D.terms.map(t => t.risk_reversal);
+  document.getElementById('x-rr').textContent =
+    `${(Math.min(...rrs) * 100).toFixed(1)} to ${(Math.max(...rrs) * 100).toFixed(1)} points`;
+
+  new Chart(document.getElementById('c-flat'), {
+    type: 'bar',
+    data: {labels: D.flat.points.map(p => p[0].toFixed(2)),
+           datasets: [{data: D.flat.points.map(p => p[1]),
+                       backgroundColor: D.flat.points.map(p => p[1] > 0 ? C().red : C().green),
+                       borderWidth: 0}]},
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {legend: {display: false},
+                tooltip: {callbacks: {label: c => `model - market: $${c.parsed.y.toFixed(2)}`}}},
+      scales: {
+        x: {title: {display: true, text: 'log(strike / forward)', color: C().ink3},
+            grid: {display: false}, ticks: {color: C().ink3, maxTicksLimit: 9}},
+        y: {title: {display: true, text: 'model - market ($)', color: C().ink3},
+            grid: {color: C().line}, ticks: {color: C().ink3}, border: {display: false}}
+      }
+    }
+  });
+
+  document.getElementById('x-worst').textContent = '$' + D.flat.worst.toFixed(2);
+  document.getElementById('x-med').textContent = '$' + D.flat.median_abs.toFixed(2);
+})();
 
 </script>
 </body>

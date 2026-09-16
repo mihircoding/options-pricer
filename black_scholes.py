@@ -153,25 +153,94 @@ def all_greeks(option_type, S, K, T, r, sigma, q=0.0):
 # ---------------------------------------------------------------------------
 
 def implied_vol(option_type, market_price, S, K, T, r, q=0.0,
-                lo=1e-4, hi=5.0, tol=1e-6, max_iter=100):
+                lo=1e-4, hi=5.0, tol=1e-8, max_iter=100, min_vega=1e-6):
     """
-    Bisection search: price is monotonically increasing in sigma, so we
-    keep halving the [lo, hi] interval until the model price matches the
-    market price. Returns np.nan if the market price is outside what any
-    volatility in [lo, hi] could produce (e.g. price below intrinsic).
+    Invert the pricing formula for sigma: find the volatility that makes
+    the model price equal the observed market price.
+
+    Newton-Raphson with a guarded bisection fallback. Price is strictly
+    increasing in sigma, so a sign change over [lo, hi] guarantees exactly
+    one root and bisection will always find it - but bisection needs ~45
+    pricing calls to reach a tight answer, and a volatility surface means
+    several hundred inversions per chain. Newton uses the derivative we
+    already have in closed form (vega) and gets there in 3-5.
+
+    The guard matters. Vega collapses toward zero for deep in- or
+    out-of-the-money options, and dividing by a near-zero derivative sends
+    Newton somewhere useless. So every Newton step is checked against the
+    bracket: if it lands outside, or vega is too small to trust, the step
+    is discarded and a bisection step is taken instead. The bracket narrows
+    on every iteration either way, so the fallback keeps converging rather
+    than starting over.
+
+    `tol` is a tolerance on SIGMA, not on price - this is the one place the
+    distinction bites. Stopping when the price error is small sounds right
+    and is wrong for exactly the options where vega is small: a deep ITM
+    call is worth intrinsic-plus-epsilon at 3% vol and at 80% vol alike, so
+    "the price matches to a millionth" can be true a long way from the
+    right volatility. Converging on sigma instead makes the answer mean
+    what it says.
+
+    `min_vega` is the other half of that, in vega()'s own units (price
+    change per percentage point of vol). When vega at the solution is below
+    it the quote genuinely does not determine a volatility - there is no
+    number to return, and returning one anyway is how a garbage IV ends up
+    plotted on a surface. np.nan is the honest answer, and so it is also
+    the answer for a quote below intrinsic value or above the underlying,
+    which real chains produce constantly.
     """
-    f_lo = price(option_type, S, K, T, r, lo, q) - market_price
-    f_hi = price(option_type, S, K, T, r, hi, q) - market_price
-    if f_lo * f_hi > 0:            # no sign change -> no root in range
+    f = lambda sig: price(option_type, S, K, T, r, sig, q) - market_price
+
+    # f is strictly increasing in sigma, which is what makes all of this
+    # work: f < 0 always means "sigma too low", never anything else, so the
+    # bracket update below needs no sign bookkeeping.
+    f_lo, f_hi = f(lo), f(hi)
+    if f_lo > 0 or f_hi < 0:       # price outside what any vol in range gives
         return float("nan")
+    if f_lo == 0.0:
+        # The floor already reproduces the price exactly, which on a real
+        # chain means the quote is at discounted intrinsic and any small
+        # vol fits it equally well. Fall through to the vega check, which
+        # is what turns that into nan rather than a fake 0.01%.
+        lo = hi = float(lo)
+
+    # Brenner-Subrahmanyam (1988): for an at-the-money option,
+    # C ~ 0.4 * S * sigma * sqrt(T), so sigma ~ 2.5 * (C/S) / sqrt(T).
+    # Rough away from the money, but a starting point near the answer is
+    # most of what Newton needs, and the bracket catches it when it isn't.
+    sigma = float(np.clip(2.5 * (market_price / S) / np.sqrt(max(T, 1e-10)), lo, hi))
 
     for _ in range(max_iter):
-        mid = 0.5 * (lo + hi)
-        f_mid = price(option_type, S, K, T, r, mid, q) - market_price
-        if abs(f_mid) < tol:
-            return mid
-        if f_lo * f_mid < 0:
-            hi = mid
+        f_sigma = f(sigma)
+        # vega() is quoted per percentage point, so the actual derivative
+        # dPrice/dsigma is 100x it. Newton with the quoted number takes
+        # hundred-fold steps and then spends the rest of its iterations
+        # being rescued by the bracket, which is a slow way to run
+        # bisection.
+        dp_dsigma = 100.0 * float(vega(S, K, T, r, sigma, q))
+
+        # Newton's own error estimate: |f| / (dPrice/dsigma) is roughly how
+        # far sigma still is from the root, in volatility units. Stopping on
+        # that rather than on the bracket width is what lets Newton finish
+        # early - it converges from one side, so the bracket can stay wide
+        # long after sigma is correct to nine decimals.
+        if dp_dsigma > 1e-12 and abs(f_sigma) / dp_dsigma < tol:
+            break
+
+        if f_sigma < 0:            # keep the bracket tight around the root
+            lo = sigma
         else:
-            lo, f_lo = mid, f_mid
-    return 0.5 * (lo + hi)
+            hi = sigma
+        if hi - lo < tol:
+            sigma = 0.5 * (lo + hi)
+            break
+
+        step = sigma - f_sigma / dp_dsigma if dp_dsigma > 1e-12 else None
+        # A Newton step outside the bracket is a step into territory where
+        # the function has no root; bisect instead of chasing it.
+        sigma = step if step is not None and lo < step < hi else 0.5 * (lo + hi)
+
+    sigma = float(sigma)
+    if float(vega(S, K, T, r, sigma, q)) < min_vega:
+        return float("nan")        # the quote carries no volatility information
+    return sigma
