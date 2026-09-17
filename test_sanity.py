@@ -284,6 +284,120 @@ check(f"implied vol converges in {calls_per_solve:.1f} pricing calls "
 #     nothing but the prices.
 print()
 
+# 12. Delta hedging. These are the checks that tie the price to something you
+#     can actually do: run the model's own replication strategy on a path and
+#     see whether the money works out. hedging.py needs nothing but numpy, so
+#     unlike the surface checks below, these always run in CI.
+import hedging as hedge
+
+
+def gbm_paths(n_paths, n_steps, S0, T, sigma, seed):
+    """GBM paths under the risk-neutral measure (zero drift, since r = 0 in
+    these checks). Returned including S0, so each row has n_steps + 1 points."""
+    rng = np.random.default_rng(seed)
+    dt = T / n_steps
+    shocks = rng.normal(0.0, 1.0, size=(n_paths, n_steps))
+    log_path = np.cumsum(-0.5 * sigma ** 2 * dt + sigma * np.sqrt(dt) * shocks, axis=1)
+    return S0 * np.concatenate([np.ones((n_paths, 1)), np.exp(log_path)], axis=1)
+
+
+T_h, sigma_h = 30 / 252, 0.20
+
+# A path that never moves: every rebalance trades at the same price, so the
+# round trip nets to zero and the seller keeps the entire premium. Any carry
+# or accounting error in the loop shows up here as a residual.
+flat = np.full(31, 100.0)
+flat_result = hedge.delta_hedge(flat, 100.0, T_h, 0.0, sigma_h)
+check(f"a motionless stock pays the whole premium "
+      f"(P&L {flat_result['pnl']:.6f} vs premium {flat_result['premium']:.6f})",
+      abs(flat_result["pnl"] - flat_result["premium"]) < 1e-9)
+
+# Put-call parity, restated as a hedging claim. With r = q = 0 a call's delta
+# exceeds a put's by exactly 1, so hedging the two differs by a single share
+# held statically - which is riskless. The two hedges must therefore end at
+# the same P&L on every path, and this is the cleanest possible test that the
+# delta and the payoff are consistent with each other.
+parity_path = gbm_paths(1, 30, 100.0, T_h, 0.25, seed=11)[0]
+call_hedge = hedge.delta_hedge(parity_path, 100.0, T_h, 0.0, sigma_h, "call")
+put_hedge = hedge.delta_hedge(parity_path, 100.0, T_h, 0.0, sigma_h, "put")
+check(f"hedged call and hedged put earn the same P&L "
+      f"(difference {call_hedge['pnl'] - put_hedge['pnl']:.2e})",
+      abs(call_hedge["pnl"] - put_hedge["pnl"]) < 1e-9)
+
+# Sell at 30% vol into a stock that only realizes 10%: the seller should win on
+# essentially every path, because the hedge is being paid for movement that
+# never arrives. Reverse the two and it should lose on essentially every path.
+# If either direction were mixed, the P&L would not be a variance bet.
+cheap = gbm_paths(200, 30, 100.0, T_h, 0.10, seed=3)
+rich = gbm_paths(200, 30, 100.0, T_h, 0.40, seed=4)
+sold_high = np.array([hedge.delta_hedge(path, 100.0, T_h, 0.0, 0.30)["pnl"]
+                      for path in cheap])
+sold_low = np.array([hedge.delta_hedge(path, 100.0, T_h, 0.0, 0.20)["pnl"]
+                     for path in rich])
+check(f"selling vol above what the stock realizes wins "
+      f"({float((sold_high > 0).mean()):.0%} of paths)",
+      (sold_high > 0).mean() > 0.95)
+check(f"selling vol below what the stock realizes loses "
+      f"({float((sold_low < 0).mean()):.0%} of paths)",
+      (sold_low < 0).mean() > 0.95)
+
+# Hedge at the same vol the path was generated with and the expected P&L is
+# zero - that is the replication argument. It holds only on average, so the
+# check is on the mean against its own standard error.
+fair = gbm_paths(400, 30, 100.0, T_h, sigma_h, seed=5)
+fair_pnl = np.array([hedge.delta_hedge(path, 100.0, T_h, 0.0, sigma_h)["pnl"]
+                     for path in fair])
+standard_error = fair_pnl.std(ddof=1) / np.sqrt(len(fair_pnl))
+check(f"hedging at the path's own vol has zero expected P&L "
+      f"(mean {fair_pnl.mean():+.4f}, 3 s.e. = {3 * standard_error:.4f})",
+      abs(fair_pnl.mean()) < 3 * standard_error)
+
+# The gamma decomposition has to reproduce the simulated hedge, or the story
+# "a delta-hedged option is a bet on variance" is just a slogan. It is a
+# second-order expansion, so it is checked to a tolerance in premium terms
+# rather than exactly.
+decomposed = np.array([hedge.gamma_pnl(path, 100.0, T_h, 0.0, sigma_h)[0]
+                       for path in fair])
+gap = np.abs(decomposed - fair_pnl).mean()
+check(f"gamma decomposition reproduces the hedge P&L "
+      f"(mean error {gap:.4f} on a {flat_result['premium']:.3f} premium)",
+      gap < 0.05 * flat_result["premium"])
+check(f"...and tracks it path by path "
+      f"(r = {float(np.corrcoef(decomposed, fair_pnl)[0, 1]):.4f})",
+      np.corrcoef(decomposed, fair_pnl)[0, 1] > 0.95)
+
+# Boyle-Emanuel: hedging less often leaves the expected P&L alone and widens
+# the distribution like sqrt(interval). Differencing against each path's own
+# daily hedge removes everything the two frequencies have in common, so what
+# is left is the error the coarser hedge introduced.
+errors = {}
+for interval in (2, 5, 10):
+    coarse = np.array([hedge.delta_hedge(path, 100.0, T_h, 0.0, sigma_h,
+                                         rebalance_every=interval)["pnl"]
+                       for path in fair])
+    errors[interval] = coarse - fair_pnl
+check(f"hedging error grows with the interval "
+      f"({errors[2].std(ddof=1):.3f} -> {errors[10].std(ddof=1):.3f})",
+      errors[2].std(ddof=1) < errors[5].std(ddof=1) < errors[10].std(ddof=1))
+scaled = {k: v.std(ddof=1) / np.sqrt(k) for k, v in errors.items()}
+check(f"...and grows like sqrt(interval), not faster "
+      f"(std/sqrt(n): {scaled[2]:.3f}, {scaled[5]:.3f}, {scaled[10]:.3f})",
+      max(scaled.values()) / min(scaled.values()) < 1.5)
+check("hedging less often does not change the expected P&L",
+      all(abs(v.mean()) < 3 * v.std(ddof=1) / np.sqrt(len(v))
+          for v in errors.values()))
+
+# Costs are charged on every share traded, so a coarser hedge trades less and
+# pays less. Both halves of that are worth asserting: the cost is real, and it
+# is proportional to the trading, not to the position.
+free = hedge.delta_hedge(fair[0], 100.0, T_h, 0.0, sigma_h, cost_bps=0.0)
+paid = hedge.delta_hedge(fair[0], 100.0, T_h, 0.0, sigma_h, cost_bps=10.0)
+check(f"transaction costs reduce P&L by exactly what they charge "
+      f"({paid['costs']:.4f})",
+      abs((free["pnl"] - paid["pnl"]) - paid["costs"]) < 1e-9)
+
+print()
+
 # vol_surface works on dataframes, so this section needs pandas. The CI job
 # installs numpy and scipy only (its workflow file needs a token scope this
 # repo's automation doesn't have), so rather than fail the build on a

@@ -21,6 +21,14 @@ against a Monte Carlo simulator, and compares model prices against live
 S&P 500 option quotes from Yahoo Finance - including the volatility smile
 backed out of real market prices.
 
+It also runs the model's own hedge. `hedging_study.py` sells a one-month
+at-the-money SPY call every month from 2007 to 2024, delta-hedges it daily, and
+decomposes the result: implied vol averaged 20.0% against 16.2% realized, the
+seller made 0.405 per $100 a month at a Sharpe of 2.20, and lost 2.675 in March
+2020. The gamma decomposition reproduces the realized P&L with r = 0.99, which
+is what makes "a delta-hedged option is a bet on variance" a measurement rather
+than a slogan. See below.
+
 Built with Python, NumPy, SciPy, Matplotlib, Plotly and Streamlit.
 
 ## Running it locally
@@ -317,6 +325,108 @@ and maturities from a week to two years (worst error ~1e-8), checks each
 refusal case, and rebuilds a synthetic chain from a known smile to confirm
 the surface code recovers the forward, the rate and every strike's
 volatility from nothing but prices.
+
+### `hedging.py` - what the price is actually worth
+
+Every price in this repo rests on a claim buried in the derivation: that an
+option can be replicated by continuously trading the underlying, so its value
+is the cost of that replication and nothing more. Nobody trades continuously.
+`hedging.py` runs the replication for real - discretely, on actual price paths -
+and `hedging_study.py` does it on eighteen years of SPY.
+
+The setup: short one at-the-money SPY call on the first trading day of every
+month, sell it at VIX, delta-hedge daily to expiry 21 trading days later, repeat.
+215 non-overlapping trades, 2007 to 2024. Everything below is per $100 of
+underlying, so 2008 and 2024 are comparable.
+
+```
+average P&L                 0.405        average implied vol        20.01%
+average premium sold        2.304        average realized vol       16.20%
+std dev of P&L              0.640        implied above realized      82.8% of months
+annualized Sharpe            2.20
+months profitable           81.4%
+worst month                -2.675  (March 2020)
+best month                  3.692  (December 2008)
+```
+
+That is the variance risk premium, measured rather than cited: implied
+volatility averaged 20.0% against 16.2% realized, and selling that gap
+systematically returned 0.405 per $100 a month at a Sharpe of 2.20. Before
+reading that as a strategy, look at the worst month, and note that the study
+sells exactly one option a month with no leverage, no position sizing and no
+stop. Selling variance is selling insurance: you are paid a small amount very
+reliably, and the occasional bill is enormous. The four worst months here are
+March 2020, September 2008, November 2008 and August 2011, which is the same
+list a credit desk would give you.
+
+**The point of the exercise is the decomposition, not the Sharpe.** In
+continuous time the P&L of a delta-hedged option is exactly
+
+```
+integral of  1/2 * Gamma * S^2 * (implied_vol^2 - realized_vol^2) dt
+```
+
+so once the delta is hedged away, the direction of the stock is gone and what
+remains is a bet on the *difference between two volatilities*, weighted by
+gamma. `gamma_pnl()` computes the discrete version term by term. On the real
+SPY trades it reproduces the simulated hedge P&L with a correlation of **0.9895**
+and a mean absolute error of 0.066 against a 2.30 average premium - the residual
+being the third-order terms the expansion drops. This is why traders say "long
+gamma" instead of "long calls".
+
+**And the gamma weighting is not a technicality.** Regress each month's P&L on
+that month's variance gap alone - implied² minus realized², no gamma - and you
+get r² = 0.51 with an intercept of 0.358, which is most of the average P&L.
+Add the gamma weighting back and r² goes to 0.98. Half the variation in the
+outcome is *not* about how much the stock moved; it is about *when* it moved,
+because an option whose spot has drifted away from the strike has almost no
+gamma left and stops caring. A delta-hedged option is a path-dependent
+approximation to a variance bet, which is the entire reason variance swaps
+exist.
+
+**Hedging less often doesn't cost money, it costs certainty.** Boyle & Emanuel
+(1980) say the error a discrete hedge adds should have zero mean and a standard
+deviation growing like the square root of the rebalancing interval. Measured
+against each month's own daily hedge, so the variance premium common to all
+frequencies is differenced out:
+
+```
+   rebalance   mean P&L   vs daily  error std  / sqrt(n)     worst
+    every 1d      0.405          -          -          -    -2.675
+    every 2d      0.422     +0.016      0.327      0.231    -2.351
+    every 5d      0.378     -0.028      0.659      0.295    -4.382
+   every 10d      0.365     -0.041      0.932      0.295    -7.783
+   every 21d      0.412     +0.007      1.057      0.231    -4.523
+```
+
+The mean change stays inside the noise at every frequency - hedging weekly
+instead of daily is not a worse trade, it is the same trade with wider error
+bars and a worst case three times as bad. The last column divides out
+sqrt(interval) and is flat from 2 to 10 days, then falls off at 21 because the
+option is then hedged once at inception and the error has nowhere left to grow.
+At 1bp of transaction cost the average P&L goes from 0.405 to 0.382, and at 5bp
+to 0.288 - so on this trade, at this size, costs matter less than the choice of
+hedging frequency does.
+
+**Caveats, because this one has more than most.** VIX is SPX's implied
+volatility, not SPY's, and it is a variance-swap-style index across the whole
+strike range rather than the at-the-money vol the study treats it as - it runs
+roughly a point above ATM vol, so the measured premium is a touch generous.
+Prices are dividend-adjusted and the risk-free rate is zero, folding both carry
+terms into the path. The hedge uses the vol the option was sold at and never
+re-marks, where a desk would re-hedge on current implied, which damps the tails.
+None of these change the shape of any result above; all of them would move the
+second decimal place.
+
+The checks in `test_sanity.py` are the part worth reading. A motionless stock
+pays the seller the entire premium to within 1e-9. A hedged call and a hedged
+put on the same strike earn identical P&L on every path, because with zero rates
+their deltas differ by exactly one share held statically - put-call parity
+restated as a statement about hedging. Selling at 30% into a stock that realizes
+10% wins on 100% of simulated paths and selling at 20% into a stock that realizes
+40% loses on 100% of them. And hedging at the path's own volatility has a mean
+P&L of zero to within three standard errors, which is the replication argument
+itself, checked rather than assumed.
 
 ## Things to notice when comparing to the market
 
