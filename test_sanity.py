@@ -498,6 +498,14 @@ if vsurf is not None:
     check("calendar-arbitrage check catches falling total variance",
           len(vsurf.calendar_arbitrage(pd.concat([near, broken], ignore_index=True))) > 0)
 
+
+
+def test_sanity_checks():
+    """Lets `python -m pytest test_sanity.py` see the checks above. They all
+    ran when the module was imported; this only reports whether any failed."""
+    assert not failures, failures
+
+
 print()
 if failures:
     print(f"{len(failures)} FAILURES: {failures}")

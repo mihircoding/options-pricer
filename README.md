@@ -10,7 +10,7 @@ pinned: false
 
 # Options Pricer
 
-**[Live site &rarr;](https://mihircoding.github.io/options-pricer/)** — prices an option three independent ways (closed form, Monte Carlo, binomial tree) live in the browser, with all five Greeks.
+**[Live site &rarr;](https://mihircoding.github.io/options-pricer/)** — prices an option three independent ways (closed form, Monte Carlo, binomial tree) live in the browser, with all five Greeks, the live SPY volatility surface, and the delta-hedging study below.
 
 ![tests](https://github.com/mihircoding/options-pricer/actions/workflows/ci.yml/badge.svg)
 
@@ -41,7 +41,7 @@ python -m streamlit run streamlit_app.py
 ```
 
 Your browser opens at http://localhost:8501 - that IS the website, served
-from your machine. `streamlit_app.py` is the landing page; the three tool
+from your machine. `streamlit_app.py` is the landing page; the five tool
 pages live in `pages/` and show up in the left sidebar automatically.
 
 Sanity-check the math (textbook values, put-call parity, greeks vs numerical
@@ -50,6 +50,13 @@ derivatives, implied-vol round trip):
 ```
 python test_sanity.py
 ```
+
+(`python -m pytest test_sanity.py` runs the same checks.)
+
+The project page in `docs/` computes most of itself in the browser. The
+volatility surface and the hedging study are real data, written to
+`docs/data.js` by `python docs/build_data.py` (or `... build_data.py hedging`
+to redo just the hedging part and keep the surface as it is).
 
 ## Putting it on the internet (free, no server needed)
 
@@ -437,6 +444,6 @@ itself, checked rather than assumed.
   per contract rather than leaving it as a remark.
 - `lastPrice` on illiquid strikes can be hours old - check volume before
   concluding an option is mispriced.
-- Black-Scholes prices European exercise and ignores dividends; US single
-  stock options are American-style, so deep in-the-money puts on dividend
-  payers will show the largest model-vs-market gaps.
+- The closed form prices European exercise only; US single stock options are
+  American-style, so deep in-the-money puts on dividend payers will show the
+  largest model-vs-market gaps. `binomial.py` prices the American version.

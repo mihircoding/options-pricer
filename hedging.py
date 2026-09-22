@@ -61,9 +61,9 @@ def delta_hedge(path, K, T, r, sigma_implied, option_type="call", q=0.0,
         time they span.
     sigma_hedge : the volatility used to compute the hedge ratio. Defaults to
         `sigma_implied`, which is what a desk does. Setting it to something else
-        answers a different and genuinely interesting question - see RESULTS in
-        the README - because the *price* you sold at and the *delta* you hedge
-        with do not have to come from the same number.
+        answers a different and genuinely interesting question, because the
+        *price* you sold at and the *delta* you hedge with do not have to come
+        from the same number.
     rebalance_every : hedge every n steps. 1 is daily on daily data.
     cost_bps : proportional transaction cost on every share traded, including
         the initial hedge and the final liquidation.
