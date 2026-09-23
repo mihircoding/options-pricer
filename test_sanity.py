@@ -500,6 +500,118 @@ if vsurf is not None:
 
 
 
+# ---------------------------------------------------------------------------
+# Arbitrage across strikes (arbitrage.py)
+#
+# The conditions are statements about the call price that follow from the
+# payoff, so a chain generated from Black-Scholes must satisfy all of them
+# exactly, and a chain with one quote nudged must fail the right one. A check
+# that has only ever been run on clean data is not a check.
+import arbitrage as arbi
+
+
+def _cross_strike_checks():
+
+    _bf_strikes = np.arange(60.0, 141.0, 5.0)
+    _bf_F, _bf_T, _bf_r = 100.0, 0.5, 0.03
+    _bf_disc = np.exp(-_bf_r * _bf_T)
+
+
+    def _bf_chain(kind, bump=None):
+        """A Black-Scholes chain with a 1% spread, optionally with one mid moved."""
+        px = np.array([float(bs.price(kind, _bf_F * _bf_disc, k, _bf_T, _bf_r, 0.22))
+                       for k in _bf_strikes])
+        if bump is not None:
+            strike, amount = bump
+            px[_bf_strikes == strike] += amount
+        return pd.DataFrame({"strike": _bf_strikes, "bid": px * 0.995,
+                             "ask": px * 1.005, "volume": 100.0, "openInterest": 100.0})
+
+
+    _bf_smile = vsurf.smile_for_expiry(_bf_chain("call"), _bf_chain("put"),
+                                       _bf_T, "clean")
+    _bf_curve = arbi.call_curve(_bf_smile)
+    _bf_res = arbi.check_smile(_bf_smile)
+
+    check("call curve spans every quoted strike after parity conversion",
+          len(_bf_curve) == len(_bf_smile))
+    check("call price falls as strike rises",
+          bool((_bf_curve["call"].diff().dropna() < 0).all()))
+    check(f"clean chain has no vertical violations "
+          f"({_bf_res['vertical_violations']} found)",
+          _bf_res["vertical_violations"] == 0)
+    check(f"clean chain has no butterfly violations "
+          f"({_bf_res['butterfly_violations']} found)",
+          _bf_res["butterfly_violations"] == 0)
+
+    # Breeden-Litzenberger: the second derivative of the call price is the
+    # risk-neutral density. The quote filter keeps strikes within 40% of the
+    # forward, so it integrates to a little under 1 - the missing few percent
+    # is the tails the chain does not quote - and its mean is the forward.
+    _bf_b = _bf_res["butterflies"]
+    _bf_mass = float((_bf_b["density"] * _bf_b["width"]).sum())
+    _bf_mean = float((_bf_b["strike"] * _bf_b["density"] * _bf_b["width"]).sum() / _bf_mass)
+    check(f"implied density integrates to just under 1 over the quoted strikes "
+          f"(got {_bf_mass:.3f})", 0.93 < _bf_mass <= 1.001)
+    check(f"implied density is centred on the forward (got {_bf_mean:.1f} "
+          f"vs {_bf_F:.1f})", abs(_bf_mean - _bf_F) < 1.0)
+
+    # A body quote $3 too dear makes the butterfly centred on it cost less than
+    # nothing: that is the whole point of the check, and it must also be large
+    # enough to survive the spread, since a violation inside the spread is not
+    # a trade.
+    _bent = vsurf.smile_for_expiry(_bf_chain("call", bump=(100.0, 3.0)),
+                                   _bf_chain("put", bump=(100.0, 3.0)), _bf_T, "bent")
+    _bent_res = arbi.check_smile(_bent)
+    check("an overpriced body is caught as a butterfly violation",
+          _bent_res["butterfly_violations"] > 0)
+    check("and it is big enough to be tradable through the spread",
+          _bent_res["butterfly_tradable"] > 0)
+
+    # A violation smaller than the spread must NOT be reported as tradable. Same
+    # bad quote, but on a chain quoted 20% wide, where paying to trade the three
+    # legs costs an order of magnitude more than the violation is worth.
+    def _wide_chain(kind, bump=None):
+        px = np.array([float(bs.price(kind, _bf_F * _bf_disc, k, _bf_T, _bf_r, 0.22))
+                       for k in _bf_strikes])
+        if bump is not None:
+            px[_bf_strikes == bump[0]] += bump[1]
+        return pd.DataFrame({"strike": _bf_strikes, "bid": px * 0.90,
+                             "ask": px * 1.10, "volume": 100.0, "openInterest": 100.0})
+
+    _tiny = vsurf.smile_for_expiry(_wide_chain("call", bump=(100.0, 0.5)),
+                                   _wide_chain("put", bump=(100.0, 0.5)), _bf_T, "wide")
+    _tiny_res = arbi.check_smile(_tiny)
+    check(f"a violation inside the bid-ask spread is not called tradable "
+          f"({_tiny_res['butterfly_violations']} found, "
+          f"{_tiny_res['butterfly_tradable']} tradable)",
+          _tiny_res["butterfly_violations"] > 0 and _tiny_res["butterfly_tradable"] == 0)
+
+    # Unequal strike spacing: the butterfly weights have to account for it, or a
+    # ragged strike ladder reads as arbitrage everywhere.
+    _ragged_k = np.array([80.0, 90.0, 95.0, 100.0, 110.0, 130.0])
+    _ragged = pd.DataFrame({
+        "strike": _ragged_k,
+        "call": [float(bs.price("call", _bf_F * _bf_disc, k, _bf_T, _bf_r, 0.22))
+                 for k in _ragged_k],
+        "half_spread": np.zeros(len(_ragged_k)),
+    })
+    check("unevenly spaced strikes do not read as arbitrage",
+          bool((arbi.butterfly_checks(_ragged, _bf_r, _bf_T)["butterfly"] > 0).all()))
+
+    # The slope bound: a call spread cannot cost more than the strikes it can pay.
+    _steep = pd.DataFrame({"strike": [90.0, 100.0], "call": [30.0, 5.0],
+                           "half_spread": [0.0, 0.0]})
+    check("a call spread priced above its maximum payoff is caught",
+          bool(arbi.vertical_checks(_steep, _bf_disc)["violation"].all()))
+
+
+if vsurf is not None:
+    _cross_strike_checks()
+else:  # pragma: no cover
+    print('SKIP  cross-strike arbitrage checks - pandas unavailable')
+
+
 def test_sanity_checks():
     """Lets `python -m pytest test_sanity.py` see the checks above. They all
     ran when the module was imported; this only reports whether any failed."""

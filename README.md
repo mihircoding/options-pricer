@@ -51,6 +51,10 @@ derivatives, implied-vol round trip):
 python test_sanity.py
 ```
 
+83 checks, including the arbitrage conditions above run against a chain
+generated from Black-Scholes (where they must all hold exactly) and against
+the same chain with one quote bent (where the right one must fire).
+
 (`python -m pytest test_sanity.py` runs the same checks.)
 
 The project page in `docs/` computes most of itself in the browser. The
@@ -305,6 +309,59 @@ keeps the early-exercise premium small, but it is not zero on deep strikes
 and long maturities, so these IVs read slightly high. The fix is inverting
 the binomial tree instead, at roughly 500x the cost per quote - a real
 trade-off, not an oversight.
+
+### `arbitrage.py` - does the chain price a distribution at all?
+
+`vol_surface.py` checks the time direction: total variance must not fall as
+maturity rises, or a calendar spread is free money. `arbitrage.py` checks the
+strike direction, where three conditions follow from the payoff alone and need
+no model: the call price falls as the strike rises, a call spread never costs
+more than it can pay, and the call price is convex in the strike. Puts are
+converted to calls through the parity forward first, so one continuous curve
+spans the whole strike range.
+
+Convexity is the interesting one, because the second derivative of the call
+price *is* the risk-neutral density (Breeden-Litzenberger). A butterfly quoted
+at a negative price is the market assigning negative probability to a range of
+prices, which never happens - what happened is that three quotes were not alive
+at the same instant, or one leg is stale, or the forward is off.
+
+Which is why every violation here is measured against the bid-ask spread of the
+legs you would have to trade. On SPY across six expiries:
+
+```
+expiry        days  strikes      verticals        butterflies      worst  density
+                                raw  tradable     raw  tradable        $     mass
+2026-10-01       8      110       1         0      34         0    -0.02    1.000
+2026-10-16      22      157       4         0      48         4    -0.10    1.000
+2026-11-20      58       82       0         0      11         1    -0.97    0.996
+2027-01-29     128      169       8         8      44         5    -1.22    0.983
+2027-09-17     358      120       1         1       9         1    -2.03    0.952
+2029-01-19     848       80       1         0      28         0    -1.54    0.859
+```
+
+**189 conditions violated by the mid prices; 20 by more than the spread.** That
+gap is what a screen built on mids with no spread filter reports as
+opportunities, and it is the reason those screens produce no trades.
+
+The density column is the implied distribution integrated over the quoted
+strikes. It is 1.000 at a week and 0.859 at two years: the far-dated chain
+simply does not quote enough of the tails to account for the distribution, so
+anything computed from it - an expected value, a tail probability - is missing
+14% of its mass, and would read as a confident number if nobody checked.
+
+`arbitrage_study.py` also asks what happens between the quoted strikes, since a
+surface quoted at 40 strikes gets used at any strike. Interpolating total
+variance and interpolating volatility produce almost identical numbers of bad
+butterflies (61 vs 54 on a 200-strike grid at one expiry) - the choice hardly
+matters, because a straight line between two quoted IVs inherits whatever
+non-convexity the quotes already had. A surface you can price a book with has
+to be *fitted* under the convexity constraint rather than joined up dot to dot.
+That is the next thing to build here.
+
+```
+python arbitrage_study.py          # SPY by default, or pass tickers
+```
 
 ### The implied-vol solver
 
