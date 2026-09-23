@@ -32,13 +32,14 @@ import pandas as pd  # noqa: E402
 
 import hedging  # noqa: E402
 import hedging_study as study  # noqa: E402
+import arbitrage as arb  # noqa: E402
 import vol_surface as vsurf  # noqa: E402
 
 TICKER = "SPY"
 N_EXPIRIES = 6
 OUT = Path(__file__).resolve().parent / "data.js"
 SURFACE_KEYS = ("ticker", "as_of", "n_quotes", "smiles", "terms", "flat",
-                "calendar_violations")
+                "calendar_violations", "arbitrage")
 
 # The simulated rebalancing check: a one-month at-the-money call sold at 20%
 # on a stock that realizes exactly 20%, so the only thing left in the P&L is
@@ -48,6 +49,54 @@ SIM_PATHS = 2000
 SIM_STEPS = 252
 SIM_REBALANCES = (1, 2, 3, 4, 6, 7, 12, 21, 42, 84, 252)
 SIM_SIGMA = 0.20
+
+
+def arbitrage_data(surface):
+    """The cross-strike no-arbitrage checks, plus one implied density curve.
+
+    Runs on the surface already fetched, so the page costs one trip to Yahoo
+    rather than two.
+    """
+    table = arb.check_surface(surface)
+    rows = []
+    for _, r in table.iterrows():
+        smile = surface[surface["expiry"] == r["expiry"]]
+        in_var = arb.interpolated_smile_violations(smile, in_variance=True)
+        in_vol = arb.interpolated_smile_violations(smile, in_variance=False)
+        rows.append({
+            "expiry": r["expiry"], "days": round(float(r["T"]) * 365),
+            "strikes": int(r["n_strikes"]),
+            "vertical": int(r["vertical_violations"]),
+            "vertical_tradable": int(r["vertical_tradable"]),
+            "butterfly": int(r["butterfly_violations"]),
+            "butterfly_tradable": int(r["butterfly_tradable"]),
+            "worst": round(float(r["worst_butterfly"]), 3),
+            "density_mass": round(float(r["density_mass"]), 4),
+            "interp_variance": in_var["violations"],
+            "interp_vol": in_vol["violations"],
+            "interp_grid": in_var["n"],
+        })
+
+    # The density picture is drawn from the expiry with the most strikes -
+    # the one whose distribution is actually resolved rather than sketched.
+    best = max(rows, key=lambda r: r["strikes"])
+    smile = surface[surface["expiry"] == best["expiry"]]
+    detail = arb.check_smile(smile)
+    b = detail["butterflies"]
+    forward = float(smile["forward"].iloc[0])
+
+    return {
+        "rows": rows,
+        "raw": int(sum(r["vertical"] + r["butterfly"] for r in rows)),
+        "tradable": int(sum(r["vertical_tradable"] + r["butterfly_tradable"]
+                            for r in rows)),
+        "density": {
+            "expiry": best["expiry"], "days": best["days"], "forward": round(forward, 2),
+            "points": [[round(float(k), 2), round(float(d), 6)]
+                       for k, d in zip(b["strike"], b["density"])],
+            "mass": best["density_mass"],
+        },
+    }
 
 
 def surface_data():
@@ -89,6 +138,7 @@ def surface_data():
             "median_abs": round(float(err["error"].abs().median()), 3),
         },
         "calendar_violations": int(len(vsurf.calendar_arbitrage(surface))),
+        "arbitrage": arbitrage_data(surface),
     }
 
     print(f"  {data['n_quotes']} quotes over {len(smiles)} expiries, "
@@ -96,6 +146,13 @@ def surface_data():
     for row in data["terms"]:
         print(f"  {row['expiry']}  atm {row['atm']:.2%}  "
               f"RR {row['risk_reversal']:+.2%}  fly {row['butterfly']:+.2%}")
+    a = data["arbitrage"]
+    print(f"  arbitrage: {a['raw']} violations on mids, {a['tradable']} through "
+          f"the spread")
+    for row in a["rows"]:
+        print(f"    {row['expiry']}  {row['strikes']:>4} strikes  "
+              f"fly {row['butterfly']:>3}/{row['butterfly_tradable']:<3} "
+              f"density mass {row['density_mass']:.3f}")
     return data
 
 

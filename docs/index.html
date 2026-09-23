@@ -107,6 +107,7 @@ sup{font-size:.72em}
   <p class="lede">Black-Scholes implemented from scratch — <span class="mono">d1</span>, <span class="mono">d2</span>, prices, all five Greeks and an implied-vol solver, with <span class="mono">scipy.stats.norm</span> as the only outside help. Then the same option priced twice more, by Monte Carlo and by a binomial tree, <strong style="color:var(--ink)">because a pricing model you've only derived one way is a model you haven't checked.</strong></p>
   <div class="links">
     <a class="btn primary" href="#calc">Price an option</a>
+    <a class="btn" href="#arbitrage">The implied distribution</a>
     <a class="btn" href="https://github.com/mihircoding/options-pricer">Source on GitHub</a>
   </div>
 </div>
@@ -272,6 +273,42 @@ sup{font-size:.72em}
       <p>Red is the model charging more than the market, green less. The errors are not noise scattered around zero; they are a curve, which is the smile showing up as money. Worst single strike: <strong style="color:var(--ink)" id="x-worst">&mdash;</strong>, median absolute error <span id="x-med">&mdash;</span> per contract.</p>
       <p>Far out on the downside the flat model prices puts at essentially nothing while the market pays a few cents for them. A few cents is not an error worth chasing &mdash; but it is the market saying it does not believe in a lognormal tail, in the only language an option quote has.</p>
       <p style="color:var(--ink3);font-size:13.5px">US ETF options are American and this inverts a European formula. Restricting to out-of-the-money quotes keeps the early-exercise premium small, not zero, so these read slightly high on deep strikes and long maturities. The fix is inverting the binomial tree instead, at roughly 500&times; the cost per quote.</p>
+    </div>
+  </div>
+</div>
+</section>
+
+<section id="arbitrage">
+<div class="wrap">
+  <div class="eyebrow">Sanity</div>
+  <h2>Is the chain pricing a real distribution?</h2>
+  <p class="lede">The smile above is built from quotes, and quotes are not always consistent with each other. Three conditions on the call price follow from the payoff alone &mdash; no model needed: it falls as the strike rises, a call spread never costs more than it can pay, and it is convex in the strike. The third is the one worth having, because the second derivative of the call price <em>is</em> the risk-neutral probability distribution.</p>
+
+  <div class="grid2">
+    <div class="panel">
+      <div class="chart"><canvas id="c-density"></canvas></div>
+      <p class="cap">The distribution SPY's option market is quoting for <span id="a-dexp">&mdash;</span> (<span id="a-ddays">&mdash;</span> days), read straight off the curvature of the call prices &mdash; Breeden&ndash;Litzenberger, 1978. No model was fitted to produce it. The dip below zero on the left is not a market view; it is two quotes that weren't alive at the same instant.</p>
+    </div>
+    <div>
+      <p>A butterfly quoted at a negative price is the market assigning <strong style="color:var(--ink)">negative probability</strong> to a range of prices, which never actually happens. What happened is that three quotes weren't simultaneous, or one leg is stale, or the forward is slightly off.</p>
+      <p>Which is why every violation here is measured against the bid-ask spread of the legs you would have to trade:</p>
+      <div class="cards" style="margin-top:14px">
+        <div class="card"><div class="k">Violated by the mid prices</div><div class="v" id="a-raw">&mdash;</div><div class="s">across six expiries</div></div>
+        <div class="card"><div class="k">Violated by more than the spread</div><div class="v green" id="a-tradable">&mdash;</div><div class="s">what you could actually trade</div></div>
+      </div>
+      <p style="margin-top:14px">That gap is what a screen built on mid prices with no spread filter reports as opportunities &mdash; and it is why those screens generate hundreds of alerts a day and no fills.</p>
+    </div>
+  </div>
+
+  <h3 style="margin-top:34px">The chain runs out before the distribution does</h3>
+  <div class="grid2">
+    <div>
+      <div class="scroll"><table id="t-arb"><thead><tr><th>Expiry</th><th class="n">Days</th><th class="n">Strikes</th><th class="n">Bad flies</th><th class="n">Tradable</th><th class="n">Density mass</th></tr></thead><tbody></tbody></table></div>
+    </div>
+    <div>
+      <p><strong style="color:var(--ink)">Density mass is the implied distribution integrated over the strikes the market quotes.</strong> It is <span class="mono" id="a-near">&mdash;</span> at a week and <span class="mono" id="a-far">&mdash;</span> at two years: the far-dated chain simply doesn't quote enough of the tails.</p>
+      <p>That matters more than it sounds. Anything computed from the far chain &mdash; an expected value, a tail probability, a risk number &mdash; is missing a seventh of its probability, and would come out looking like a confident figure if nobody checked. The check costs one pass over the quotes.</p>
+      <p>Filling the gaps between quoted strikes doesn't help either. Interpolating total variance and interpolating volatility produce almost the same number of bad butterflies (<span class="mono" id="a-interp">&mdash;</span> on a 200-strike grid), because a straight line between two quoted IVs inherits whatever non-convexity the quotes already had. A surface you can price a book with has to be <em>fitted</em> under the convexity constraint, not joined up dot to dot. That is the next thing to build here.</p>
     </div>
   </div>
 </div>
@@ -673,6 +710,66 @@ update();
       }
     }
   });
+
+  // ---- cross-strike arbitrage and the implied density ----
+  const A = D.arbitrage;
+  if (A) {
+    const dens = A.density;
+    document.getElementById('a-dexp').textContent = dens.expiry;
+    document.getElementById('a-ddays').textContent = dens.days;
+    document.getElementById('a-raw').textContent = A.raw;
+    document.getElementById('a-tradable').textContent = A.tradable;
+
+    const near = A.rows[0], far = A.rows[A.rows.length - 1];
+    document.getElementById('a-near').textContent = near.density_mass.toFixed(3);
+    document.getElementById('a-far').textContent = far.density_mass.toFixed(3);
+    const widest = A.rows.reduce((a, b) => b.strikes > a.strikes ? b : a, A.rows[0]);
+    document.getElementById('a-interp').textContent =
+      widest.interp_variance + ' vs ' + widest.interp_vol;
+
+    new Chart(document.getElementById('c-density'), {
+      type: 'line',
+      data: {labels: dens.points.map(p => p[0].toFixed(0)),
+             datasets: [{data: dens.points.map(p => p[1]),
+                         borderColor: C().blue, backgroundColor: C().blue + '22',
+                         borderWidth: 1.6, pointRadius: 0, fill: true, tension: 0}]},
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: {legend: {display: false},
+                  tooltip: {callbacks: {title: i => 'strike ' + i[0].label,
+                                        label: c => 'density ' + c.parsed.y.toFixed(5)}}},
+        scales: {
+          x: {title: {display: true, text: 'strike', color: C().ink3},
+              grid: {display: false}, ticks: {color: C().ink3, maxTicksLimit: 9}},
+          y: {title: {display: true, text: 'implied probability density', color: C().ink3},
+              grid: {color: C().line}, ticks: {color: C().ink3}, border: {display: false}}
+        }
+      },
+      plugins: [{
+        id: 'fwd',
+        afterDraw(chart) {
+          const {ctx, chartArea, scales} = chart;
+          const i = dens.points.reduce((best, p, j) =>
+            Math.abs(p[0] - dens.forward) < Math.abs(dens.points[best][0] - dens.forward) ? j : best, 0);
+          const x = scales.x.getPixelForValue(i);
+          ctx.save();
+          ctx.strokeStyle = C().ink3; ctx.setLineDash([4, 3]); ctx.lineWidth = 1.2;
+          ctx.beginPath(); ctx.moveTo(x, chartArea.top); ctx.lineTo(x, chartArea.bottom); ctx.stroke();
+          ctx.setLineDash([]); ctx.fillStyle = C().ink3; ctx.font = '600 11px Inter, sans-serif';
+          ctx.fillText('forward ' + dens.forward.toFixed(0), x + 6, chartArea.top + 12);
+          ctx.restore();
+        }
+      }]
+    });
+
+    document.querySelector('#t-arb tbody').innerHTML = A.rows.map(r => `
+      <tr><td class="mono">${r.expiry}</td>
+          <td class="n">${r.days}</td>
+          <td class="n">${r.strikes}</td>
+          <td class="n">${r.butterfly}</td>
+          <td class="n">${r.butterfly_tradable}</td>
+          <td class="n">${r.density_mass.toFixed(3)}</td></tr>`).join('');
+  }
 
   document.getElementById('x-worst').textContent = '$' + D.flat.worst.toFixed(2);
   document.getElementById('x-med').textContent = '$' + D.flat.median_abs.toFixed(2);
