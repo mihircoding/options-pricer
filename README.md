@@ -357,7 +357,92 @@ butterflies (61 vs 54 on a 200-strike grid at one expiry) - the choice hardly
 matters, because a straight line between two quoted IVs inherits whatever
 non-convexity the quotes already had. A surface you can price a book with has
 to be *fitted* under the convexity constraint rather than joined up dot to dot.
-That is the next thing to build here.
+
+### Fitting it instead: SVI
+
+`svi.py` is that fit. For log-moneyness k = log(K/F) it models total variance
+w = sigma^2 T with Gatheral's raw SVI:
+
+```
+w(k) = a + b * ( rho * (k - m) + sqrt((k - m)^2 + sigma^2) )
+```
+
+Five parameters, each one a feature of the smile you can point at: `a` the
+level, `b` the wing slope, `rho` the tilt (negative for an equity index,
+because the crash is on the put side), `m` where the minimum sits and `sigma`
+how rounded the bottom is. The reason for this function rather than a spline
+is its shape: it is a hyperbola, so it is convex in k by construction and goes
+linear in both wings, which is exactly what the no-arbitrage conditions ask
+for. A cubic spline has no such shape and will turn over in the wings however
+well it fits the quoted points.
+
+Two things make it work in practice.
+
+**The fit is constrained, not checked afterwards.** Gatheral and Jacquier give
+the risk-neutral density's sign in closed form from the parameters - g(k),
+implemented as `durrleman_g` - so a candidate can be rejected before it is
+ever accepted. The search only ever keeps parameters whose g stays
+non-negative across the quoted range and beyond it. That is the whole
+difference from interpolating: the surface cannot price a negative
+probability, for a structural reason rather than a lucky one.
+
+**The five-parameter fit is really a two-parameter search.** For fixed
+(m, sigma) the model is linear in (a, b*rho, b), so those come from a small
+weighted least-squares solve and only (m, sigma) get searched - a grid then a
+local refine. SVI has well-documented local minima; reducing the non-convex
+part to two dimensions removes that failure mode for about a thousand
+three-parameter solves, which is microseconds.
+
+On SPY across six expiries:
+
+```
+expiry          n   fit err   worst       in  bad butterflies    min g         wings
+                    vol pts  vol pt   spread  linear      svi            left  right
+2026-10-06    102      0.19    1.02    9/102      86        0    0.046   0.03   0.00
+2026-10-16    156      0.32    1.86   12/156      69        0    0.050   0.05   0.00
+2026-11-20    162      0.27    1.38    8/162      35        0    0.162   0.07   0.01
+2027-01-29    169      0.13    0.60   25/169      27        0    0.198   0.11   0.01
+2027-09-17    120      0.33    1.28    9/120      16        0    0.211   0.18   0.03
+2029-01-19     98      0.38    1.24   89/98       53        0    0.089   0.43   0.00
+```
+
+**Zero bad butterflies at every expiry**, against 16 to 86 for the linear
+interpolation of the same quotes on the same grid. That column is the point of
+the exercise.
+
+The `in spread` column is the part worth being honest about, and it is not
+flattering. A single five-parameter function **cannot** reprice a liquid SPY
+chain inside its own bid-ask spreads: at one week it lands between the bid and
+the ask on 9 strikes out of 102, and the worst miss is 32 half-spreads. At two
+years it is 89 out of 98 - not because the fit got better (the error in vol
+points is *larger* there) but because the spreads got wide enough to hide it.
+
+That is the real trade being made, and it is worth saying out loud rather than
+quoting an r-squared: **SVI is a no-arbitrage interpolator, not a repricer.**
+Its job is to give a usable surface at every strike that was never quoted, and
+the price of guaranteeing no arbitrage everywhere is that it will not match the
+most liquid strikes to the penny. A desk that needs both runs SVI for the
+surface and carries a per-strike residual on top of it.
+
+One smaller result along the way - weighting each quote by its vega:
+
+```
+expiry       weighting     rmse  worst miss  in spread
+2026-10-06   vega          0.19       32.4x      9/102
+2026-10-06   equal         0.17       99.0x      5/102
+2026-10-16   vega          0.32       52.6x     12/156
+2026-10-16   equal         0.25      184.1x     12/156
+2026-11-20   vega          0.27       39.3x      8/162
+2026-11-20   equal         0.20      136.0x      5/162
+```
+
+Equal weighting wins on RMSE and loses on the thing that matters, by a factor
+of three to five on the worst repricing error. It spends its accuracy on deep
+wing quotes whose implied vol is mostly rounding - the option barely responds
+to volatility at all, so inverting its price for a vol produces a number with
+very little information in it - and pays for that at the strikes anyone
+trades. Fitting in the right units is a smaller decision than choosing the
+parameterization and a larger one than it looks.
 
 ```
 python arbitrage_study.py          # SPY by default, or pass tickers

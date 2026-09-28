@@ -612,6 +612,77 @@ else:  # pragma: no cover
     print('SKIP  cross-strike arbitrage checks - pandas unavailable')
 
 
+def _raises(fn, exc) -> bool:
+    try:
+        fn()
+    except exc:
+        return True
+    except Exception:
+        return False
+    return False
+
+
+# ---------------------------------------------------------------------------
+# SVI smile fit. Pure numpy, so unlike the surface checks above these always
+# run. The properties worth pinning are the ones the module exists for: that
+# the fit recovers a smile it was given, that it refuses to return a smile
+# with a negative density, and that g(k) is a formula in the parameters
+# rather than something measured off a grid of prices afterwards.
+# ---------------------------------------------------------------------------
+import svi as _svi
+
+_truth = _svi.SVIParams(a=0.040, b=0.40, rho=-0.45, m=-0.02, sigma=0.12)
+_k = np.linspace(-0.45, 0.35, 31)
+_w = _truth.total_variance(_k)
+_fit = _svi.fit_svi(_k, _w)
+_p = _fit["params"]
+
+check("SVI recovers the parameters of a smile it generated",
+      abs(_p.a - _truth.a) < 1e-3 and abs(_p.b - _truth.b) < 1e-2
+      and abs(_p.rho - _truth.rho) < 1e-2)
+check("SVI fit error on an exact SVI smile is numerically zero",
+      _fit["rmse_total_var"] < 1e-6)
+check("a fitted smile passes its own butterfly test",
+      _fit["butterfly_free"] and _fit["min_g"] > 0)
+
+# g(k) against a finite-difference version of the same expression. If these
+# disagree, the closed form has a typo - which would be invisible in every
+# other check here, because a wrong g would still be smooth and positive.
+_h = 1e-5
+_kk = np.linspace(-0.6, 0.6, 41)
+_w0 = _truth.total_variance(_kk)
+_w1 = (_truth.total_variance(_kk + _h) - _truth.total_variance(_kk - _h)) / (2 * _h)
+_w2 = (_truth.total_variance(_kk + _h) - 2 * _w0
+       + _truth.total_variance(_kk - _h)) / _h ** 2
+_g_numeric = ((1 - _kk * _w1 / (2 * _w0)) ** 2
+              - (_w1 / 4) * (1 / _w0 + 0.25) * _w1 + _w2 / 2)
+check("Durrleman g(k) matches a finite-difference evaluation",
+      bool(np.max(np.abs(_svi.durrleman_g(_truth, _kk) - _g_numeric)) < 1e-6))
+
+# A smile that really does admit butterfly arbitrage must be reported as
+# such. b large with |rho| near 1 makes the wing slope blow past Lee's bound.
+_bad = _svi.SVIParams(a=0.01, b=1.8, rho=-0.95, m=0.0, sigma=0.02)
+_bad_checks = _svi.is_arbitrage_free(_bad)
+check("an arbitrable smile is reported as arbitrable",
+      not _bad_checks["butterfly_free"] and not _bad_checks["lee_bound_ok"])
+
+check("total variance is positive across the fitted range",
+      bool(np.all(_p.total_variance(np.linspace(-1.5, 1.5, 101)) > 0)))
+check("wing slopes are b(1 -/+ rho), as Lee's bound is stated",
+      abs(_p.left_slope - _p.b * (1 - _p.rho)) < 1e-12
+      and abs(_p.right_slope - _p.b * (1 + _p.rho)) < 1e-12)
+
+# Noisy quotes, the realistic case: the fit should stay arbitrage-free even
+# when the data it is handed is not.
+_rng = np.random.default_rng(7)
+_noisy = _truth.total_variance(_k) * (1 + _rng.normal(0, 0.03, len(_k)))
+_nfit = _svi.fit_svi(_k, _noisy)
+check("a fit to non-convex noisy quotes is still butterfly-free",
+      _nfit["butterfly_free"])
+check("SVI needs at least as many quotes as parameters",
+      _raises(lambda: _svi.fit_svi(_k[:4], _w[:4]), ValueError))
+
+
 def test_sanity_checks():
     """Lets `python -m pytest test_sanity.py` see the checks above. They all
     ran when the module was imported; this only reports whether any failed."""
