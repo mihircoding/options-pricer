@@ -424,28 +424,140 @@ the price of guaranteeing no arbitrage everywhere is that it will not match the
 most liquid strikes to the penny. A desk that needs both runs SVI for the
 surface and carries a per-strike residual on top of it.
 
-One smaller result along the way - weighting each quote by its vega:
+One smaller result along the way - weighting each quote by its vega. RMSE is in
+volatility points:
 
 ```
 expiry       weighting     rmse  worst miss  in spread
-2026-10-06   vega          0.19       32.4x      9/102
-2026-10-06   equal         0.17       99.0x      5/102
-2026-10-16   vega          0.32       52.6x     12/156
-2026-10-16   equal         0.25      184.1x     12/156
-2026-11-20   vega          0.27       39.3x      8/162
-2026-11-20   equal         0.20      136.0x      5/162
+2026-10-07   vega          1.26       37.1x     11/99
+2026-10-07   equal         1.03       78.8x      4/99
+2026-10-16   vega          1.38       42.9x      9/156
+2026-10-16   equal         1.26      171.0x     21/156
+2026-11-20   vega          0.98       39.1x      7/162
+2026-11-20   equal         0.57      149.2x      3/162
+2027-01-29   vega          0.24       29.7x     20/170
+2027-01-29   equal         0.22       36.9x     11/170
 ```
 
 Equal weighting wins on RMSE and loses on the thing that matters, by a factor
-of three to five on the worst repricing error. It spends its accuracy on deep
-wing quotes whose implied vol is mostly rounding - the option barely responds
-to volatility at all, so inverting its price for a vol produces a number with
-very little information in it - and pays for that at the strikes anyone
-trades. Fitting in the right units is a smaller decision than choosing the
-parameterization and a larger one than it looks.
+of two to four on the worst repricing error.
+
+Equal weighting spends its accuracy on deep wing quotes whose implied vol is
+mostly rounding - the option barely responds to volatility at all, so inverting
+its price for a vol produces a number with very little information in it - and
+pays for that at the strikes anyone trades. Fitting in the right units is a
+smaller decision than choosing the parameterization and a larger one than it
+looks.
+
+**And the rmse column above used to be wrong, by a factor that changed from row
+to row.** `fit_svi` works in total variance and reported its residuals in
+sqrt(total variance), which is sigma·sqrt(T) rather than a volatility - under the
+name `rmse_vol_points`. So identical fit quality read as a different number at
+every maturity, and the one-week expiry looked about seven times better fitted
+than it was: 0.19 where the answer is 1.26. The fix is one division by sqrt(T),
+placed in `fit_smile`, which is the first function in the chain that knows what T
+is; `fit_svi` now returns `rmse_sqrt_total_var` under that name so nothing can
+read a volatility out of it by accident again. The short end of this chain fits
+considerably worse than this section used to claim, and a table whose unit
+changes from row to row is worse than no table.
 
 ```
 python arbitrage_study.py          # SPY by default, or pass tickers
+```
+
+
+### `ssvi.py` - one surface, so a calendar spread has a price too
+
+Everything above fits **one expiry at a time**, under the constraint that its own
+implied density stays positive. That removes butterfly arbitrage and says nothing
+whatever about the direction strikes do not run in. Six slices each individually
+sound can still cross each other in maturity, and total variance that falls as
+maturity rises is a calendar spread with a negative price. `vol_surface.py` has
+checked for that since it was written, and checking is not excluding.
+
+It is not a theoretical worry. Taking the six independently fitted SVI slices and
+reading them against each other on a common log-moneyness grid:
+
+```
+Every slice has a positive density on its own. Between slices, 27 of
+405 grid points price a calendar spread at a negative value.
+    2026-10-07 -> 2026-10-16: 27 points, worst total variance drop 0.00051 at k=+0.40
+```
+
+Excluding it needs the surface to be **one object with one set of parameters**.
+`ssvi.py` is Gatheral and Jacquier's SSVI (2014):
+
+```
+w(k, theta) = theta/2 * { 1 + rho*phi(theta)*k
+                          + sqrt( (phi(theta)*k + rho)^2 + 1 - rho^2 ) }
+```
+
+`theta` is the at-the-money total variance of that expiry - put k=0 and the
+braces collapse to 2 - so the term structure is a parameter rather than an
+output. Everything else is shared across the whole surface: one `rho` for the
+skew's tilt and one `phi(theta)` for how the smile's width moves with variance,
+taken as the usual power law. Nine parameters for 802 SPY quotes across six
+expiries, against 30 for six independent slices.
+
+On SPY, fitted jointly:
+
+```
+  rho     -0.4702     one skew tilt for the whole surface; negative is the equity sign
+  eta      0.7587     smile width scale
+  gamma    0.5843     how the width decays as variance grows
+
+expiry        days     theta  atm vol
+2026-10-07       8   0.00021   10.2%
+2026-10-16      16   0.00067   12.2%
+2026-11-20      52   0.00259   13.6%
+2027-01-29     122   0.00701   14.5%
+2027-09-17     352   0.02520   16.2%
+2029-01-19     842   0.06417   16.7%
+
+  negative-density grid points   0   (400 strikes x 6 expiries)
+  negative calendar spreads      0   (81 strikes x 5 adjacent pairs)
+```
+
+Both no-arbitrage conditions are closed-form statements about those three shared
+parameters, enforced during the search rather than checked afterwards. The
+verification lines above are deliberately run with the project's *existing*
+checkers - `svi.durrleman_g` through a conversion that writes each SSVI slice in
+raw SVI parameters, and a direct reading of total variance between expiries -
+because a theorem quoted from a paper and a theorem implemented correctly are
+different claims.
+
+**One thing came out differently from expected.** Of the two calendar conditions,
+the exotic-looking one - a bound on d(theta·phi)/dtheta - is *free* for this
+phi. Working the derivative through, the ratio it bounds collapses to
+(1-gamma)/(1+theta), which is below 1 for any admissible gamma, while the bound
+never falls below 1.04. It cannot bind. The entire calendar guarantee therefore
+comes from the plain half - theta non-decreasing in maturity - which is exactly
+the half a per-expiry fit cannot even express, because each slice solves for its
+own level knowing nothing about the slice beside it.
+
+And what it costs, in volatility points:
+
+```
+expiry        days   per-slice SVI   SSVI surface   worst SSVI
+2026-10-07       8           1.26p          1.91p        5.55p
+2026-10-16      16           1.39p          3.43p       12.92p
+2026-11-20      52           0.98p          1.50p        5.86p
+2027-01-29     122           0.24p          1.12p        4.08p
+2027-09-17     352           0.35p          0.95p        1.62p
+2029-01-19     842           0.25p          0.35p        0.62p
+```
+
+Nine parameters reprice a liquid SPY chain worse than 30 do, and dropping the
+arbitrage conditions from the search improves total-variance RMSE by 7.2% - into
+a surface that is arbitrageable, which is what enforcement is for. Same
+conclusion as the SVI section, one level up: **the constrained surface is not a
+better repricer, it is a surface you can differentiate.** Consistency across
+expiries is what lets you price a calendar spread, a variance swap, or anything
+else touching two maturities at once, and the per-strike residual is what a desk
+carries on top.
+
+```
+python ssvi_study.py               # SPY by default, or pass a ticker
 ```
 
 ### The implied-vol solver

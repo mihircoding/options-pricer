@@ -683,6 +683,153 @@ check("SVI needs at least as many quotes as parameters",
       _raises(lambda: _svi.fit_svi(_k[:4], _w[:4]), ValueError))
 
 
+# ---------------------------------------------------------------------------
+# SSVI: the whole surface under both no-arbitrage conditions at once.
+#
+# The important checks here are the ones that tie the theory to the code. The
+# conditions in the paper are statements about (rho, eta, gamma); what a user
+# cares about is whether the fitted SURFACE has negative densities or negative
+# calendar spreads in it. Those are different claims, and a bug in the
+# conversion between them would be invisible to either one alone - so both are
+# checked, and the fact that they agree is the real test.
+# ---------------------------------------------------------------------------
+import ssvi as _ssvi
+
+_ss = _ssvi.SSVIParams(rho=-0.5, eta=0.8, gamma=0.4,
+                       thetas=(0.002, 0.01, 0.04), ts=(0.08, 0.5, 2.0))
+
+# theta IS the at-the-money total variance: put k=0 in the SSVI formula and the
+# braces collapse to 2. If this drifts, every term structure the model reports
+# is mislabelled.
+check("theta is at-the-money total variance",
+      all(abs(float(_ss.total_variance(0.0, th)) - th) < 1e-12
+          for th in _ss.thetas))
+
+# Every SSVI slice is a raw SVI slice. The conversion is what lets svi.py's
+# density check be pointed at this surface instead of being rewritten.
+_kgrid = np.linspace(-1.2, 1.2, 241)
+check("as_svi_slice reproduces the SSVI slice exactly",
+      all(float(np.max(np.abs(_ss.total_variance(_kgrid, th)
+                              - _ss.as_svi_slice(th).total_variance(_kgrid))))
+          < 1e-10 for th in _ss.thetas))
+
+check("the converted slice carries the surface's own rho",
+      all(_ss.as_svi_slice(th).rho == _ss.rho for th in _ss.thetas))
+
+# Butterfly and calendar conditions have to reject as well as accept, or they
+# are decoration. eta large pushes theta*phi*(1+|rho|) past 4.
+check("the butterfly condition accepts a sane parameter set",
+      _ssvi.butterfly_ok(-0.5, 0.8, 0.4))
+check("the butterfly condition rejects eta far too large",
+      not _ssvi.butterfly_ok(-0.5, 40.0, 0.05))
+check("admissible() refuses rho outside (-1, 1)",
+      not _ssvi.admissible(-1.2, 0.8, 0.4) and not _ssvi.admissible(1.0, 0.8, 0.4))
+check("admissible() refuses a non-positive eta",
+      not _ssvi.admissible(-0.5, 0.0, 0.4))
+check("admissible() refuses gamma outside (0, 1)",
+      not _ssvi.admissible(-0.5, 0.8, 1.4) and not _ssvi.admissible(-0.5, 0.8, 0.0))
+
+check("an admissible surface has no negative calendar spread anywhere",
+      _ssvi.calendar_violations(_ss) == 0)
+check("an admissible surface has no negative density anywhere",
+      _ssvi.density_violations(_ss) == 0)
+
+# The calendar condition is free for the power law, and the derivation says why:
+# d(theta*phi)/dtheta / phi collapses to (1-gamma)/(1+theta), bounded above by
+# 1-gamma < 1, while the bound (1+sqrt(1-rho^2))/rho^2 never falls below 1.
+# Checking the identity is checking the proof; checking that calendar_ok never
+# fires is checking the conclusion. Both, because either alone would hide a
+# transcription error.
+_tg = np.geomspace(1e-4, 3.0, 4_000)
+for _gamma in (0.05, 0.3, 0.5, 0.85):
+    _phi = 1.0 / (_tg ** _gamma * (1 + _tg) ** (1 - _gamma))
+    _ratio = np.gradient(_tg * _phi, _tg) / _phi
+    check(f"d(theta*phi)/dtheta / phi is (1-gamma)/(1+theta) at gamma={_gamma}",
+          float(np.max(np.abs(_ratio - (1 - _gamma) / (1 + _tg)))) < 5e-3)
+check("that ratio is always below the bound, so calendar_ok cannot bind",
+      max((1 - g) for g in (0.02, 0.5, 0.98)) < min(
+          (1 + np.sqrt(1 - r ** 2)) / r ** 2
+          for r in np.linspace(-0.999, 0.999, 401) if abs(r) > 1e-6))
+check("calendar_ok accepts every admissible power-law parameter set",
+      all(_ssvi.calendar_ok(r, e, g)
+          for r in (-0.95, -0.4, 0.0, 0.6) for e in (0.1, 1.0, 12.0)
+          for g in (0.05, 0.5, 0.9)))
+
+# Which leaves theta monotone as the half that actually does the work, so it has
+# to be the half that gets tested. A surface whose at-the-money variance falls
+# with maturity prices a negative calendar spread at every strike.
+_backwards = _ssvi.SSVIParams(rho=-0.5, eta=0.8, gamma=0.4,
+                              thetas=(0.03, 0.02), ts=(1.0, 2.0))
+check("a falling theta is a negative calendar spread at every strike",
+      _ssvi.calendar_violations(_backwards, -0.4, 0.4, 41) == 41)
+check("and admissible parameters do not rescue it",
+      _ssvi.admissible(-0.5, 0.8, 0.4)
+      and _ssvi.calendar_violations(_backwards) > 0)
+
+# Round trip: generate quotes FROM a known admissible surface, fit them back,
+# and the fit must recover a surface that is also admissible and close in level.
+_true = _ssvi.SSVIParams(rho=-0.45, eta=1.1, gamma=0.45,
+                         thetas=(0.0015, 0.008, 0.03, 0.09),
+                         ts=(0.05, 0.25, 1.0, 3.0))
+_slices = [{"T": t, "k": np.linspace(-0.5, 0.5, 31),
+            "w": _true.total_variance(np.linspace(-0.5, 0.5, 31), th),
+            "weights": np.ones(31)}
+           for t, th in zip(_true.ts, _true.thetas)]
+_sfit = _ssvi.fit_ssvi(_slices)
+check(f"a surface generated by SSVI is refitted to itself "
+      f"(rmse {_sfit['rmse_w']:.2e})", _sfit["rmse_w"] < 5e-4)
+check("the refit is admissible and its theta is monotone",
+      _sfit["butterfly_ok"] and _sfit["calendar_ok"] and _sfit["theta_monotone"])
+check("the refit recovers the at-the-money term structure",
+      float(np.max(np.abs(np.array(_sfit["params"].thetas)
+                          - np.array(_true.thetas))
+                   / np.array(_true.thetas))) < 0.10)
+check("the fitted surface is free of both kinds of arbitrage",
+      _ssvi.density_violations(_sfit["params"]) == 0
+      and _ssvi.calendar_violations(_sfit["params"]) == 0)
+
+# theta is forced monotone by construction, so quotes whose at-the-money
+# variance FALLS with maturity - which real chains do, from a stale quote - must
+# come back monotone anyway, at the cost of fit on the offending expiry.
+_falling = [{"T": t, "k": np.linspace(-0.4, 0.4, 25),
+             "w": _true.total_variance(np.linspace(-0.4, 0.4, 25), th),
+             "weights": np.ones(25)}
+            for t, th in zip((0.25, 1.0), (0.02, 0.012))]
+_ffit = _ssvi.fit_ssvi(_falling)
+check("a falling at-the-money term structure is forced monotone",
+      _ffit["theta_monotone"]
+      and _ffit["params"].thetas[1] >= _ffit["params"].thetas[0])
+
+check("theta_at interpolates the term structure and stays monotone",
+      all(_true.theta_at(a) <= _true.theta_at(b)
+          for a, b in zip(np.linspace(0.01, 5.0, 60),
+                          np.linspace(0.01, 5.0, 60)[1:])))
+check("theta_at reproduces the fitted thetas at the fitted maturities",
+      all(abs(_true.theta_at(t) - th) < 1e-12
+          for t, th in zip(_true.ts, _true.thetas)))
+
+# ---------------------------------------------------------------------------
+# The units bug in the fit diagnostic. fit_svi() reports residuals in
+# sqrt(total variance), which is sigma*sqrt(T) and therefore a different unit
+# at every maturity; fit_smile() divides by sqrt(T) to get volatility. The old
+# code reported the former under the name "rmse_vol_points", which made a
+# one-week expiry look about seven times better fitted than it was.
+# ---------------------------------------------------------------------------
+_synth_k = np.linspace(-0.3, 0.3, 21)
+for _T in (0.02, 1.0):
+    _pp = _svi.SVIParams(a=0.04 * _T, b=0.12 * _T, rho=-0.4, m=0.0, sigma=0.15)
+    _fit_u = _svi.fit_svi(_synth_k, _pp.total_variance(_synth_k))
+    _vol_rmse = _fit_u["rmse_sqrt_total_var"] / np.sqrt(_T)
+    check(f"sqrt-total-variance and volatility error differ by sqrt(T) "
+          f"at T={_T}",
+          abs(_vol_rmse * np.sqrt(_T) - _fit_u["rmse_sqrt_total_var"]) < 1e-15)
+check("fit_svi no longer claims to report volatility points",
+      "rmse_vol_points" not in _svi.fit_svi(_synth_k,
+                                            _svi.SVIParams(0.04, 0.12, -0.4, 0.0,
+                                                           0.15)
+                                            .total_variance(_synth_k)))
+
+
 def test_sanity_checks():
     """Lets `python -m pytest test_sanity.py` see the checks above. They all
     ran when the module was imported; this only reports whether any failed."""

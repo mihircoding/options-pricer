@@ -210,12 +210,17 @@ def fit_svi(k, total_variance, weights=None, enforce_no_arbitrage: bool = True,
                              enforce_no_arbitrage)
 
     checks = is_arbitrage_free(best, k.min() - 0.5, k.max() + 0.5)
-    iv_resid = np.sqrt(np.maximum(best.total_variance(k), 1e-12)) - np.sqrt(w)
+
+    # Residuals in sqrt(total variance), which is sigma * sqrt(T) and NOT a
+    # volatility. fit_smile() knows T and converts; nothing here does, and a
+    # key called "vol" that holds sigma*sqrt(T) is how a table ends up with a
+    # different unit in every row. See fit_smile().
+    resid = np.sqrt(np.maximum(best.total_variance(k), 1e-12)) - np.sqrt(w)
     return {
         "params": best,
         "rmse_total_var": best_err,
-        "rmse_vol_points": float(np.sqrt(np.mean(iv_resid ** 2))),
-        "max_vol_error": float(np.max(np.abs(iv_resid))),
+        "rmse_sqrt_total_var": float(np.sqrt(np.mean(resid ** 2))),
+        "max_sqrt_total_var_error": float(np.max(np.abs(resid))),
         "rejected_candidates": rejected,
         "n_quotes": len(k),
         **checks,
@@ -286,6 +291,17 @@ def fit_smile(smile, weight_by: str = "vega") -> dict:
     out["T"] = T
     out["forward"] = F
     out["expiry"] = s["expiry"].iloc[0] if "expiry" in s else None
+
+    # Repricing error in implied VOLATILITY, which needs T and so cannot be
+    # computed inside fit_svi(). This used to be reported straight out of there
+    # in sqrt(total variance) units under the name "rmse_vol_points", which is
+    # sigma * sqrt(T) - so the same fit quality read as a different number at
+    # every maturity, and a one-week expiry looked about seven times better
+    # than it was. Dividing by sqrt(T) puts every row in the same unit, which
+    # is the only way the per-expiry table in the README means anything.
+    root_t = np.sqrt(T)
+    out["rmse_vol_points"] = out["rmse_sqrt_total_var"] / root_t
+    out["max_vol_error"] = out["max_sqrt_total_var_error"] / root_t
     return out
 
 
