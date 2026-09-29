@@ -108,6 +108,7 @@ sup{font-size:.72em}
   <div class="links">
     <a class="btn primary" href="#calc">Price an option</a>
     <a class="btn" href="#arbitrage">The implied distribution</a>
+    <a class="btn" href="#svi">The arbitrage-free fit</a>
     <a class="btn" href="https://github.com/mihircoding/options-pricer">Source on GitHub</a>
   </div>
 </div>
@@ -308,7 +309,62 @@ sup{font-size:.72em}
     <div>
       <p><strong style="color:var(--ink)">Density mass is the implied distribution integrated over the strikes the market quotes.</strong> It is <span class="mono" id="a-near">&mdash;</span> at a week and <span class="mono" id="a-far">&mdash;</span> at two years: the far-dated chain simply doesn't quote enough of the tails.</p>
       <p>That matters more than it sounds. Anything computed from the far chain &mdash; an expected value, a tail probability, a risk number &mdash; is missing a seventh of its probability, and would come out looking like a confident figure if nobody checked. The check costs one pass over the quotes.</p>
-      <p>Filling the gaps between quoted strikes doesn't help either. Interpolating total variance and interpolating volatility produce almost the same number of bad butterflies (<span class="mono" id="a-interp">&mdash;</span> on a 200-strike grid), because a straight line between two quoted IVs inherits whatever non-convexity the quotes already had. A surface you can price a book with has to be <em>fitted</em> under the convexity constraint, not joined up dot to dot. That is the next thing to build here.</p>
+      <p>Filling the gaps between quoted strikes doesn't help either. Interpolating total variance and interpolating volatility produce almost the same number of bad butterflies (<span class="mono" id="a-interp">&mdash;</span> on a 200-strike grid), because a straight line between two quoted IVs inherits whatever non-convexity the quotes already had. A surface you can price a book with has to be <em>fitted</em> under the convexity constraint, not joined up dot to dot &mdash; which is <a href="#svi">the next section</a>.</p>
+    </div>
+  </div>
+</div>
+</section>
+
+<section id="svi">
+<div class="wrap">
+  <div class="eyebrow">The fix</div>
+  <h2>Fit it, don't join the dots</h2>
+  <p class="lede">The section above ends on a promise: a surface you can price a book with has to be <em>fitted</em> under the convexity constraint. <span class="mono">svi.py</span> is that fit. For log-moneyness <span class="mono">k = log(K/F)</span> it models total variance with Gatheral's raw SVI.</p>
+
+  <div class="panel" style="text-align:center;padding:18px 16px">
+    <span class="mono" style="font-size:15px">w(k) = a + b &middot; ( &rho;(k &minus; m) + &radic;((k &minus; m)&sup2; + &sigma;&sup2;) )</span>
+  </div>
+
+  <p>Five parameters, each one a feature you can point at: <span class="mono">a</span> the level, <span class="mono">b</span> the wing slope, <span class="mono">&rho;</span> the tilt (negative for an equity index, because the crash is on the put side), <span class="mono">m</span> where the minimum sits, <span class="mono">&sigma;</span> how rounded the bottom is. <strong style="color:var(--ink)">The reason for this function rather than a spline is its shape.</strong> It is a hyperbola, so it is convex in <span class="mono">k</span> by construction and goes linear in both wings &mdash; exactly what the no-arbitrage conditions ask for. A cubic spline has no such shape and will turn over in the wings however well it fits the quoted points.</p>
+
+  <div class="cards">
+    <div class="card"><div class="k">Bad butterflies, linear interpolation</div><div class="v red" id="s-lin">&mdash;</div><div class="s">between the quoted strikes</div></div>
+    <div class="card"><div class="k">Bad butterflies, SVI fit</div><div class="v green" id="s-svi">&mdash;</div><div class="s">structurally, not by luck</div></div>
+    <div class="card"><div class="k">Typical fit error</div><div class="v" id="s-rmse">&mdash;</div><div class="s">volatility points</div></div>
+    <div class="card"><div class="k">Lands inside the spread</div><div class="v amber" id="s-inside">&mdash;</div><div class="s" id="s-inside-s">&mdash;</div></div>
+  </div>
+
+  <div class="grid2" style="margin-top:26px;align-items:start">
+    <div class="panel">
+      <div class="chart"><canvas id="c-svi-fit"></canvas></div>
+      <p class="cap">The fitted smile through the quoted implied vols for <span id="s-exp">&mdash;</span> (<span id="s-days">&mdash;</span> days), <span id="s-nq">&mdash;</span> quotes. The line extends past the quoted range on both sides, which is the point of fitting a function: it has to give a sane number where nothing was quoted.</p>
+    </div>
+    <div>
+      <p><strong style="color:var(--ink)">The constraint is enforced during the fit, not checked afterwards.</strong> Gatheral and Jacquier give the risk-neutral density's sign in closed form from the parameters &mdash; <span class="mono">g(k)</span>, implemented as <span class="mono">durrleman_g</span> &mdash; so a candidate whose density would go negative is rejected before it is ever accepted. That is the whole difference from interpolating: the surface <em>cannot</em> price a negative probability, for a structural reason rather than a lucky one.</p>
+      <p><strong style="color:var(--ink)">And the five-parameter fit is really a two-parameter search.</strong> For fixed <span class="mono">(m, &sigma;)</span> the model is linear in the other three, so those come out of a small weighted least-squares solve and only two parameters get searched &mdash; a grid, then a local refine. SVI has well-documented local minima; reducing the non-convex part to two dimensions removes that failure mode for about a thousand tiny solves, which is microseconds.</p>
+    </div>
+  </div>
+
+  <div class="scroll" style="margin-top:26px">
+    <table id="t-svi"><thead><tr><th>Expiry</th><th class="n">Days</th><th class="n">Quotes</th><th class="n">Fit error</th><th class="n">Worst</th><th class="n">Inside spread</th><th class="n">Bad flies, linear</th><th class="n">Bad flies, SVI</th><th class="n">min g</th><th class="n">&rho;</th></tr></thead><tbody></tbody></table>
+    <p class="cap">Fit error and &ldquo;worst&rdquo; are in volatility points, so 0.30 means three tenths of a vol away from the quote. &ldquo;min g&rdquo; is the smallest value of the density-sign function across the fitted range; positive everywhere means no butterfly arbitrage exists anywhere on the curve, including between the strikes and outside them.</p>
+  </div>
+
+  <div class="note">
+    <p><strong>The honest half, and it is not flattering.</strong> A single five-parameter function <em>cannot</em> reprice a liquid SPY chain inside its own bid-ask spreads. At one week it lands between the bid and the ask on a handful of strikes out of a hundred, and the worst miss is tens of half-spreads. At two years it is nearly all of them &mdash; not because the fit got better (the error in vol points is <em>larger</em> there) but because the spreads got wide enough to hide it.</p>
+    <p style="margin-top:10px">That is the real trade being made, and it is worth saying rather than quoting an r-squared: <strong style="color:var(--ink)">SVI is a no-arbitrage interpolator, not a repricer.</strong> Its job is to give a usable surface at every strike nobody quoted, and the price of guaranteeing no arbitrage everywhere is that it will not match the busiest strikes to the penny. A desk that needs both runs SVI for the surface and carries a per-strike residual on top of it.</p>
+  </div>
+
+  <div class="grid2" style="margin-top:26px;align-items:start">
+    <div class="panel">
+      <h3>What the vega weighting buys</h3>
+      <div class="chart"><canvas id="c-svi-weight"></canvas></div>
+      <p class="cap">Worst repricing error, measured in half-spreads of that strike. Lower is better.</p>
+    </div>
+    <div>
+      <p>Each quote is weighted by its vega &mdash; how much the option's price actually responds to volatility. Equal weighting <em>wins</em> on root-mean-square error and loses badly on the thing that matters, by a factor of three to five on the worst repricing error.</p>
+      <p>The reason is worth keeping: a deep out-of-the-money option barely responds to volatility at all, so inverting its price for an implied vol produces a number that is mostly rounding. Equal weighting spends its accuracy on those quotes and pays for it at the strikes anyone trades. <strong style="color:var(--ink)">Fitting in the right units is a smaller decision than choosing the parameterization and a larger one than it looks.</strong></p>
+      <p style="font-size:13.5px;color:var(--ink3)">One condition this does not touch: each expiry is fitted on its own, so nothing here prevents calendar arbitrage <em>between</em> expiries. That needs the fits tied together across maturity, and is the next thing to build.</p>
     </div>
   </div>
 </div>
@@ -891,6 +947,74 @@ update();
   $('h-c0').textContent = cost(0);
   $('h-c1').textContent = cost(1);
   $('h-c5').textContent = cost(5);
+})();
+
+
+/* ---- SVI smile fit (svi.py), built by docs/build_data.py ---- */
+(function () {
+  const D = window.DATA;
+  if (!D || !D.svi || !D.svi.rows.length) return;
+  const S = D.svi, el = id => document.getElementById(id);
+  const c = C();
+  const rows = S.rows;
+  const near = rows[0];
+  const median = [...rows].sort((a, b) => a.rmse_vol - b.rmse_vol)[Math.floor(rows.length / 2)];
+  const inside = rows.reduce((a, r) => a + r.inside, 0);
+  const total = rows.reduce((a, r) => a + r.n, 0);
+
+  el('s-lin').textContent = S.linear_total.toLocaleString();
+  el('s-svi').textContent = S.svi_total;
+  el('s-rmse').textContent = median.rmse_vol.toFixed(2);
+  el('s-inside').textContent = inside + ' / ' + total;
+  el('s-inside-s').textContent = 'mostly the long-dated chain, where spreads are wide';
+
+  const curve = S.curve;
+  if (curve) {
+    el('s-exp').textContent = curve.expiry;
+    el('s-days').textContent = curve.days;
+    el('s-nq').textContent = curve.quotes;
+    new Chart(document.getElementById('c-svi-fit'), {
+      data:{datasets:[
+        {type:'scatter', label:'quoted implied vol',
+         data: curve.points.map(p => ({x:p[0], y:p[1] * 100})),
+         backgroundColor: c.ink3, pointRadius:2},
+        {type:'line', label:'SVI fit',
+         data: curve.fit.map(p => ({x:p[0], y:p[1] * 100})),
+         borderColor: c.blue, borderWidth:2, pointRadius:0, tension:0}
+      ]},
+      options:{responsive:true, maintainAspectRatio:false,
+        plugins:{legend:{labels:{boxWidth:10, boxHeight:10, padding:12}},
+          tooltip:{callbacks:{label:i =>
+            'k ' + i.parsed.x.toFixed(3) + '  vol ' + i.parsed.y.toFixed(2) + '%'}}},
+        scales:{x:{type:'linear', title:{display:true, text:'log-moneyness  k = log(K/F)'},
+                   grid:{color:c.line}},
+                y:{title:{display:true, text:'implied volatility (%)'},
+                   grid:{color:c.line}}}}});
+  }
+
+  document.querySelector('#t-svi tbody').innerHTML = rows.map(r =>
+    `<tr><td>${r.expiry}</td><td class="n">${r.days}</td><td class="n">${r.quotes}</td>` +
+    `<td class="n">${r.rmse_vol.toFixed(2)}</td><td class="n">${r.max_vol.toFixed(2)}</td>` +
+    `<td class="n">${r.inside}/${r.n}</td>` +
+    `<td class="n neg">${r.linear_bad}</td>` +
+    `<td class="n" style="color:var(--green);font-weight:600">${r.svi_bad}</td>` +
+    `<td class="n">${r.min_g.toFixed(3)}</td><td class="n">${r.rho.toFixed(2)}</td></tr>`).join('');
+
+  new Chart(document.getElementById('c-svi-weight'), {type:'bar', data:{
+    labels: rows.map(r => r.expiry),
+    datasets:[
+      {label:'vega weighted', data: rows.map(r => r.worst_spreads),
+       backgroundColor: c.blue, borderRadius:2},
+      {label:'equal weighted', data: rows.map(r => r.equal_worst),
+       backgroundColor: c.red, borderRadius:2}
+    ]},
+    options:{responsive:true, maintainAspectRatio:false,
+      plugins:{legend:{labels:{boxWidth:10, boxHeight:10, padding:12}},
+        tooltip:{callbacks:{label:i =>
+          i.dataset.label + ': worst miss ' + i.parsed.y.toFixed(1) + ' half-spreads'}}},
+      scales:{x:{grid:{display:false}, ticks:{font:{size:10}}},
+              y:{title:{display:true, text:'worst repricing error (half-spreads)'},
+                 grid:{color:c.line}}}}});
 })();
 
 </script>

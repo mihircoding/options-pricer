@@ -99,6 +99,69 @@ def arbitrage_data(surface):
     }
 
 
+def svi_data(surface):
+    """Fit each expiry with SVI and re-run the butterfly count on the fit.
+
+    Runs on the surface already fetched, same as arbitrage_data, so the page
+    still costs one trip to Yahoo. The fitted curve for the best-resolved
+    expiry is carried too, so the page can draw the fit through the quotes
+    rather than only quoting a residual.
+    """
+    import svi
+
+    rows, curve = [], None
+    for expiry, smile in surface.groupby("expiry", sort=False):
+        try:
+            fit = svi.fit_smile(smile)
+        except (ValueError, RuntimeError) as e:
+            print(f"    {expiry}: no SVI fit ({e})")
+            continue
+        linear = arb.interpolated_smile_violations(smile, in_variance=True)
+        after = svi.grid_violations(smile, fit)
+        quality = svi.fit_quality(smile, fit)
+        equal = svi.fit_smile(smile, weight_by="equal")
+        equal_q = svi.fit_quality(smile, equal)
+
+        rows.append({
+            "expiry": expiry,
+            "days": round(float(smile["T"].iloc[0]) * 365),
+            "quotes": fit["n_quotes"],
+            "rmse_vol": round(fit["rmse_vol_points"] * 100, 3),
+            "max_vol": round(fit["max_vol_error"] * 100, 3),
+            "inside": quality["inside_spread"],
+            "n": quality["n"],
+            "worst_spreads": round(quality["worst_in_spreads"], 1),
+            "linear_bad": linear["violations"],
+            "svi_bad": after["violations"],
+            "min_g": round(fit["min_g"], 4),
+            "left": round(fit["left_slope"], 3),
+            "right": round(fit["right_slope"], 3),
+            "rho": round(fit["params"].rho, 3),
+            "equal_rmse": round(equal["rmse_vol_points"] * 100, 3),
+            "equal_worst": round(equal_q["worst_in_spreads"], 1),
+        })
+
+        if curve is None or fit["n_quotes"] > curve["quotes"]:
+            s_ = smile.dropna(subset=["iv"]).sort_values("strike")
+            F = float(s_["forward"].iloc[0])
+            T = float(s_["T"].iloc[0])
+            k = np.log(s_["strike"].values / F)
+            grid = np.linspace(k.min() - 0.08, k.max() + 0.08, 160)
+            curve = {
+                "expiry": expiry, "quotes": fit["n_quotes"], "forward": round(F, 2),
+                "days": round(T * 365),
+                "points": [[round(float(x), 4), round(float(v), 4)]
+                           for x, v in zip(k, s_["iv"].values)],
+                "fit": [[round(float(x), 4),
+                         round(float(fit["params"].implied_vol(x, T)), 4)]
+                        for x in grid],
+            }
+
+    return {"rows": rows, "curve": curve,
+            "linear_total": sum(r["linear_bad"] for r in rows),
+            "svi_total": sum(r["svi_bad"] for r in rows)}
+
+
 def surface_data():
     print(f"pulling {TICKER} chains...")
     surface = vsurf.build_surface(TICKER, max_expiries=N_EXPIRIES, verbose=True)
@@ -139,6 +202,7 @@ def surface_data():
         },
         "calendar_violations": int(len(vsurf.calendar_arbitrage(surface))),
         "arbitrage": arbitrage_data(surface),
+        "svi": svi_data(surface),
     }
 
     print(f"  {data['n_quotes']} quotes over {len(smiles)} expiries, "
